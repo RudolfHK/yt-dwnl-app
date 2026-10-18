@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Audio Saver</string>
+    <string name="share_target_label">Save audio</string>
+
+    <string name="link_label">YouTube link</string>
+    <string name="link_placeholder">https://youtu.be/…</string>
+    <string name="paste">Paste</string>
+    <string name="clear">Clear</string>
+    <string name="valid_link">Valid link · video ID %1$s</string>
+    <string name="download">Download audio</string>
+    <string name="cancel">Cancel</string>
+    <string name="retry">Retry</string>
+
+    <string name="phase_resolving">Resolving stream…</string>
+    <string name="phase_downloading">Downloading</string>
+    <string name="phase_saving">Tagging and saving…</string>
+    <string name="progress_known">%1$d%% · %2$s of %3$s</string>
+    <string name="progress_unknown">%1$s downloaded (size unknown)</string>
+    <string name="saved_title">Saved</string>
+    <string name="saved_location">in %1$s · %2$s</string>
+    <string name="play">Play</string>
+    <string name="share">Share</string>
+    <string name="open_folder">Open folder</string>
+    <string name="cancelled">Download cancelled.</string>
+    <string name="no_player">No app installed that can play %1$s files.</string>
+    <string name="no_file_manager">No file manager could open the folder. The file is in %1$s.</string>
+
+    <string name="notice_title">Personal use only</string>
+    <string name="notice_body">Only download content you have the right to: your own uploads, content under a licence that allows it (e.g. Creative Commons), or where personal copies are permitted by your local law. Respect creators and YouTube\'s terms. This app does not bypass paid or DRM-protected content.</string>
+
+    <string name="notification_channel">Downloads</string>
+    <string name="notification_channel_description">Progress of the current audio download</string>
+    <string name="notification_done">Saved to %1$s</string>
+    <string name="notification_failed">Download failed</string>
+</resources>

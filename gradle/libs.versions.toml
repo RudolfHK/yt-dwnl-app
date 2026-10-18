@@ -1,0 +1,40 @@
+[versions]
+# Versions cross-checked in Oct 2026 against TeamNewPipe/NewPipe's own (AGP 9) build.
+activity = "1.13.0"
+agp = "9.3.1"
+compose = "1.12.0"
+core = "1.19.0"
+coroutines = "1.11.0"
+desugar = "2.1.5"
+junit = "4.13.2"
+kotlin = "2.4.10"
+lifecycle = "2.11.0"
+material3 = "1.4.0"
+# Same NewPipeExtractor commit the NewPipe app itself builds against (dev, 2026-10-05),
+# served by JitPack. If JitPack ever drops the artifact, see README "Building the extractor locally".
+newpipe-extractor = "65cabc2ba5216ee871ace4a9963c08bdbf5d5dc0"
+okhttp = "5.5.0"
+
+[libraries]
+android-desugar = { module = "com.android.tools:desugar_jdk_libs_nio", version.ref = "desugar" }
+androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "activity" }
+androidx-compose-foundation = { module = "androidx.compose.foundation:foundation", version.ref = "compose" }
+androidx-compose-material3 = { module = "androidx.compose.material3:material3", version.ref = "material3" }
+androidx-compose-ui = { module = "androidx.compose.ui:ui", version.ref = "compose" }
+androidx-compose-ui-tooling = { module = "androidx.compose.ui:ui-tooling", version.ref = "compose" }
+androidx-compose-ui-tooling-preview = { module = "androidx.compose.ui:ui-tooling-preview", version.ref = "compose" }
+androidx-core = { module = "androidx.core:core-ktx", version.ref = "core" }
+androidx-lifecycle-runtime-compose = { module = "androidx.lifecycle:lifecycle-runtime-compose", version.ref = "lifecycle" }
+junit = { module = "junit:junit", version.ref = "junit" }
+kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
+kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }
+kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
+kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "coroutines" }
+newpipe-extractor = { module = "com.github.TeamNewPipe:NewPipeExtractor", version.ref = "newpipe-extractor" }
+okhttp = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttp" }
+okhttp-mockwebserver = { module = "com.squareup.okhttp3:mockwebserver3", version.ref = "okhttp" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
