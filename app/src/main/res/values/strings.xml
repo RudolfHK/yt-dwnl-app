@@ -29,6 +29,42 @@
     <string name="notice_title">Personal use only</string>
     <string name="notice_body">Only download content you have the right to: your own uploads, content under a licence that allows it (e.g. Creative Commons), or where personal copies are permitted by your local law. Respect creators and YouTube\'s terms. This app does not bypass paid or DRM-protected content.</string>
 
+    <string name="info_button">About this app</string>
+    <string name="info_title">About Audio Saver</string>
+    <string name="info_close">Close</string>
+    <string name="info_how_title">How a download works</string>
+    <string-array name="info_how_steps">
+        <item>Checks the link on your phone (no network) and pulls out the 11-character video ID.</item>
+        <item>Asks YouTube directly for the video\'s details (title, uploader, year) and its list of audio-only streams, the same way the YouTube website does. No account, no login, no server in between.</item>
+        <item>Picks the best original-language M4A stream (AAC, about 128 kbps). If there is none, it falls back to Opus in WebM.</item>
+        <item>Downloads that stream straight from YouTube\'s servers in resumable chunks, in a background service so it keeps going when you leave the app.</item>
+        <item>Writes title, artist, year and the source link into the file as tags. The audio itself is never re-encoded, so it stays exactly as YouTube serves it.</item>
+        <item>Saves it to Music/AudioSaver through Android\'s MediaStore, so no storage permission is needed, then checks that the saved file is complete.</item>
+    </string-array>
+    <string name="info_errors_title">Why some downloads fail</string>
+    <string name="info_errors_intro">YouTube has no official download API. The app reads YouTube the way a browser does, and YouTube changes its site often and deliberately makes this harder. When something goes wrong, the error card says exactly what happened:</string>
+    <string-array name="info_errors">
+        <item>Age-restricted, private, members-only, paid or region-locked videos: these need a signed-in account or another country, and the app never logs in. Retrying won\'t help.</item>
+        <item>Video unavailable or live stream: the video was removed, the link is wrong, or it is still live. Check the link in the YouTube app, or wait until the stream has ended.</item>
+        <item>\"Confirm you\'re not a bot\" or rate-limited: YouTube is suspicious of your network. Wait a while, switch between Wi-Fi and mobile data, or turn off any VPN, then tap Retry.</item>
+        <item>Network error or download failed: the connection dropped. Check your internet and tap Retry.</item>
+        <item>\"YouTube changed something\" or no audio stream found: YouTube changed its site and the extractor has to catch up. Retry later and update the app once a newer NewPipeExtractor is out.</item>
+        <item>Couldn\'t save the file: usually the phone is out of storage. Free up some space and tap Retry.</item>
+    </string-array>
+    <string name="info_errors_report">If an error keeps happening, long-press the message on the error card to copy it into a bug report.</string>
+
+    <string name="info_libs_title">Built with</string>
+    <string-array name="info_libs">
+        <item>NewPipeExtractor (TeamNewPipe): reads video details and stream links from YouTube</item>
+        <item>OkHttp (Square): HTTP client for the extractor and the download</item>
+        <item>Kotlin and kotlinx.coroutines: language and background work</item>
+        <item>Jetpack Compose with Material 3: the user interface</item>
+        <item>AndroidX Core, Activity and Lifecycle: Android app plumbing</item>
+        <item>Android desugar_jdk_libs: newer Java APIs on Android 10 to 12</item>
+        <item>Own code for link checking, chunked downloading and M4A tagging (no FFmpeg)</item>
+    </string-array>
+    <string name="info_license">Licensed under GPL-3.0-or-later, as required by NewPipeExtractor.</string>
+
     <string name="notification_channel">Downloads</string>
     <string name="notification_channel_description">Progress of the current audio download</string>
     <string name="notification_done">Saved to %1$s</string>

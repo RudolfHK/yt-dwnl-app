@@ -17,9 +17,12 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -28,9 +31,15 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringArrayResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -61,6 +70,9 @@ fun MainScreen(
 ) {
     val context = LocalContext.current
     val canDownload = parsed is LinkParseResult.Valid && !download.isActive
+    var showInfo by rememberSaveable { mutableStateOf(false) }
+
+    if (showInfo) InfoDialog(onDismiss = { showInfo = false })
 
     Scaffold { padding ->
         Column(
@@ -71,7 +83,16 @@ fun MainScreen(
                 .padding(horizontal = 20.dp, vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            Text(stringResource(R.string.app_name), style = MaterialTheme.typography.headlineMedium)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    stringResource(R.string.app_name),
+                    style = MaterialTheme.typography.headlineMedium,
+                    modifier = Modifier.weight(1f),
+                )
+                IconButton(onClick = { showInfo = true }) {
+                    Icon(painterResource(R.drawable.ic_info), contentDescription = stringResource(R.string.info_button))
+                }
+            }
 
             OutlinedTextField(
                 value = input,
@@ -252,6 +273,44 @@ private fun LegalNotice() {
             Text(stringResource(R.string.notice_title), style = MaterialTheme.typography.titleSmall)
             Text(stringResource(R.string.notice_body), style = MaterialTheme.typography.bodySmall)
         }
+    }
+}
+
+@Composable
+private fun InfoDialog(onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.info_close)) } },
+        title = { Text(stringResource(R.string.info_title)) },
+        text = {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(stringResource(R.string.info_how_title), style = MaterialTheme.typography.titleSmall)
+                stringArrayResource(R.array.info_how_steps).forEachIndexed { i, step ->
+                    InfoListItem("${i + 1}.", step)
+                }
+                Spacer(Modifier.height(4.dp))
+                Text(stringResource(R.string.info_errors_title), style = MaterialTheme.typography.titleSmall)
+                Text(stringResource(R.string.info_errors_intro), style = MaterialTheme.typography.bodyMedium)
+                stringArrayResource(R.array.info_errors).forEach { InfoListItem("•", it) }
+                Text(stringResource(R.string.info_errors_report), style = MaterialTheme.typography.bodySmall)
+                Spacer(Modifier.height(4.dp))
+                Text(stringResource(R.string.info_libs_title), style = MaterialTheme.typography.titleSmall)
+                stringArrayResource(R.array.info_libs).forEach { InfoListItem("•", it) }
+                Spacer(Modifier.height(4.dp))
+                Text(stringResource(R.string.info_license), style = MaterialTheme.typography.bodySmall)
+            }
+        },
+    )
+}
+
+@Composable
+private fun InfoListItem(marker: String, text: String) {
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(marker, style = MaterialTheme.typography.bodyMedium)
+        Text(text, style = MaterialTheme.typography.bodyMedium)
     }
 }
 
