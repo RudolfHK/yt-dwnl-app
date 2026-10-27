@@ -1,7 +1,8 @@
 # Audio Saver
 
 A small, single-purpose Android app: **paste or share a YouTube link → an audio file appears in your phone's Music folder.**
-No library, no queue, no accounts, no in-app playback, no browsing.
+Paste a **mix, album or playlist** link instead and it lists the songs so you can tick which ones to download.
+No library, no accounts, no in-app playback, no browsing.
 
 > **Personal use only.** Use this app only for content you have the right to download: your own uploads, content under a
 > licence that allows it (e.g. Creative Commons), or where personal copies are permitted by your local law. It does not
@@ -15,7 +16,7 @@ No library, no queue, no accounts, no in-app playback, no browsing.
 
 ## Building
 
-- **Android Studio** (a version supporting AGP 9.3): open the project folder, let it sync, run the `app` configuration.
+- **Android Studio** (a version supporting AGP 9.2): open the project folder, let it sync, run the `app` configuration.
 - **Command line:** `./gradlew :app:assembleDebug` → `app/build/outputs/apk/debug/app-debug.apk`
 - **CI:** every push runs `.github/workflows/build.yml` (unit tests, lint, debug APK). The APK is attached to the run as
   the `audiosaver-debug-apk` artifact, so you can install without building locally.
@@ -28,17 +29,20 @@ rebuilds it).
 
 ```
 core/            Pure Kotlin/JVM, no Android. Unit-tested on the JVM.
-  link/          YouTubeLinkParser: paste/share text -> validated 11-char VideoId, or a specific reason why not
+  link/          YouTubeLinkParser: paste/share text -> VideoId, or a mix/album/playlist CollectionRef, or why not
+  collection/    CollectionListing: the pick-your-songs list (selection, load more, de-dup, 200-song cap)
   engine/        ExtractionEngine interface + models + FailureReason   <-- the seam
   download/      HttpAudioDownloader: ranged, resumable, cancellable HTTP download with progress
   tag/           Mp4Tagger: writes iTunes-style tags into M4A in one streaming pass (no FFmpeg)
   pipeline/      AudioDownloadPipeline: resolve -> download -> tag -> save -> verify, emits DownloadState
+                 BatchDownloader: runs the selected songs through that pipeline one by one
 engine-newpipe/  The ONLY module that imports NewPipeExtractor (pure JVM)
 app/             Android: Compose UI, share target, foreground service, notifications, MediaStore sink
 ```
 
 **Swapping the extraction engine** (this *will* be needed one day — YouTube breaks extractors on purpose): write a new
-`ExtractionEngine` implementation (resolve a `VideoId` to title/uploader/year + one audio stream URL, throw
+`ExtractionEngine` implementation (resolve a `VideoId` to title/uploader/year + one audio stream URL, list a
+mix/album/playlist page by page, throw
 `AudioSaveException` with the most specific `FailureReason`), put it in its own module, and change the single line in
 `AudioSaverApp.kt` that constructs `NewPipeExtractionEngine`. Nothing else in the app knows which library is used.
 
@@ -129,18 +133,41 @@ YouTube offers audio-only streams as AAC-LC ~128 kbps in MP4 (itag 140), HE-AAC 
 
 ---
 
+## Mixes, albums and playlists
+
+| Link | Recognised as | What happens |
+|---|---|---|
+| `watch?v=X&list=RD…` ("copy link" while a mix plays), `youtu.be/X?list=RD…`, `playlist?list=RDX` | **Mix** | Songs listed (first page ≈25, *Load more* for more, de-duplicated, max 200). Choice of *Whole mix* or *Just this song*. |
+| `music.youtube.com/watch?…&list=RDAMVM…` / `RDCLAK…` | **YouTube Music mix** | Same as a mix. |
+| `playlist?list=OLAK5uy_…` | **Album** | Songs listed; saved to `Music/AudioSaver/<Album>/` as `03 - Title.m4a` with album, album-artist and track-number (`3/10`, position in the whole album) tags. YouTube's "Album - " title prefix is removed. |
+| `playlist?list=PL…` (and other public lists) | **Playlist** | Songs listed; saved like single songs (a playlist is not an album, so no album tags). |
+| `list=LL` / `WL` | rejected | "Liked"/"Watch later" are private and need sign-in; a video link that merely carries such a list still works as a single video. |
+
+- The list loads automatically ~0.4 s after a list link appears (no request per keystroke). Everything selectable is
+  ticked; deleted/private/members-only/live entries are shown but can't be ticked.
+- **One batch at a time**, songs downloaded one after another in the same foreground service (notification:
+  "Song 3 of 12", Cancel all). A failing song is marked with its specific reason and the batch carries on — except on
+  *rate-limited* or *confirm you're not a bot*, where it stops and marks the rest "Not attempted" instead of hammering
+  YouTube. A 1 s pause between songs keeps the request rate polite. The summary offers *Retry failed (n)* (album
+  songs keep their track numbers) and *Open folder*.
+- **EU consent cookie:** YouTube only serves mixes in the EU when its `SOCS` consent cookie is set to "configured
+  cookies" (NewPipeExtractor's `setConsentAccepted(true)`); with the default "reject all" value mix extraction fails
+  there. The app sends that value. It keeps no cookie jar, so nothing is stored or tracked.
+
 ## Test plan
 
 ### Automated (JVM, run anywhere: `./gradlew :core:test :engine-newpipe:test`)
 
 | Suite | Covers |
 |---|---|
-| `YouTubeLinkParserTest` (10) | watch / youtu.be share links (`?si=`) / m. / music. / shorts / live / embed / nocookie / bare IDs / links inside shared text; empty, garbage, other hosts, look-alike hosts, wrong-length IDs, playlist-only and channel links, with reasons |
-| `Mp4TaggerTest` (7, needs ffmpeg on PATH) | YouTube-style DASH fMP4, fragmented+`mfra`, faststart (`stco`), moov-at-end; re-tagging replaces tags; junk and truncated input rejected. Verified with ffprobe + bit-identical decoded-audio MD5 |
+| `YouTubeLinkParserTest` (13) | watch / youtu.be share links (`?si=`) / m. / music. / shorts / live / embed / nocookie / bare IDs / links inside shared text; mix (incl. seed derivation, genre mixes), music mix, album and playlist links; private (`LL`/`WL`) and malformed lists; empty, garbage, other hosts, look-alike hosts, wrong-length IDs, channel links, with reasons |
+| `Mp4TaggerTest` (9, needs ffmpeg on PATH) | YouTube-style DASH fMP4, fragmented+`mfra`, faststart (`stco`), moov-at-end; album / album-artist / track `3/10` tags; no album fields for mixes; re-tagging replaces tags; junk and truncated input rejected. Verified with ffprobe + bit-identical decoded-audio MD5 |
+| `CollectionListingTest` (7) | default selection, unavailable rows, toggle / all / none, load-more de-dup keeping the user's choices, looping mix ends, 200-song cap, album vs mix batch contexts |
+| `BatchDownloaderTest` (5) | order, carries on after a failure, stops on rate-limiting without further requests, cancel keeps finished songs and cancels the rest, album track numbers/folder/tags, retry-failed keeps album context |
 | `HttpAudioDownloaderTest` (10) | chunked Range download, determinate vs indeterminate progress, server ignoring Range, resume after mid-chunk disconnect, 403 / 429, persistent network failure, empty responses, prompt cancel of a stalled read |
 | `AudioDownloadPipelineTest` (10) | phase order, tagged output, temp-file cleanup, extractor error pass-through (no download attempted), untaggable → saved with warning, WebM path, lying/failing storage → STORAGE error, cancel → Cancelled, file-name sanitising |
-| `NewPipeExtractionEngineTest` (5) | NewPipe exception → `FailureReason` mapping keeps the original message; stream choice (original track, M4A over Opus, bitrate, progressive only); "- Topic" cleanup |
-| `LiveYouTubeTest` (3, opt-in: `LIVE_YOUTUBE=1`) | Real YouTube: resolves a Creative-Commons video, full pipeline to a tagged file, unavailable ID → `UNAVAILABLE`. **Run this first when "downloads stopped working"** — it tells you whether YouTube/the extractor broke. |
+| `NewPipeExtractionEngineTest` (8) | NewPipe exception → `FailureReason` mapping keeps the original message; stream choice (original track, M4A over Opus, bitrate, progressive only); "- Topic" cleanup; playlist entries → items (incl. `&list=` URLs), non-downloadable entries, album title prefix |
+| `LiveYouTubeTest` (4, opt-in: `LIVE_YOUTUBE=1`) | Real YouTube: resolves a Creative-Commons video, full pipeline to a tagged file, unavailable ID → `UNAVAILABLE`, lists that video's mix and loads a second page. **Run this first when "downloads stopped working"** — it tells you whether YouTube/the extractor broke. |
 
 ### Manual, on a device or emulator
 
@@ -164,7 +191,20 @@ Use content you're allowed to download, e.g. Blender's *Big Buck Bunny* (CC BY):
 5. **Failure case.** `https://youtu.be/aaaaaaaaaaa` (valid format, no such video): fails with "Video unavailable" and
    the extractor's own message, plus *Retry*. Then turn on airplane mode and download a valid link: "Network error"
    with the underlying exception; turn the network back on and *Retry* succeeds.
-6. **Robustness extras.** Lock the screen / switch apps mid-download (it continues); rotate during a download (progress
+6. **Mix.** Play any song in the YouTube app, open its *Mix*, use *Share → Copy link* and paste (or *Share → Audio
+   Saver*). Expect "Mix link · pick the songs below", the chips *Whole mix* / *Just this song*, and within a second or
+   two the song list with everything ticked. Untick a few, tap *Load more* (more songs appear, none repeated, your
+   choices kept), then *Download N selected*: the card shows "Song 1 of N" with an overall bar and the current song's
+   phase; each row turns ✓ / ✗ with a reason. The notification shows the same with *Cancel all*. Switch to *Just this
+   song* and it behaves like a normal single-song link.
+7. **Album.** Paste a YouTube Music album link (`music.youtube.com/playlist?list=OLAK5uy_…`). Download 2 of its songs:
+   they land in `Music/AudioSaver/<Album>/` as `01 - …`, `05 - …`, and a music app groups them under the album with the
+   right track numbers.
+8. **Batch cancel and retry.** Start a 10-song batch, tap *Cancel all* during song 3: songs 1–2 stay saved, the rest
+   show "cancelled", no partial file remains. Put the phone in airplane mode during a batch: affected songs fail with
+   "Network error"; turn it back on and *Retry failed* downloads just those.
+9. **Private list.** `https://www.youtube.com/playlist?list=WL` → inline "Watch later … can't be read without signing in".
+10. **Robustness extras.** Lock the screen / switch apps mid-download (it continues); rotate during a download (progress
    survives); deny the notification permission (download still works, just without a notification).
 
 ## Known limitations
@@ -173,4 +213,8 @@ Use content you're allowed to download, e.g. Blender's *Big Buck Bunny* (CC BY):
 - YouTube may answer "Sign in to confirm you're not a bot" for some networks/IPs; the app reports exactly that.
 - Saved M4A keeps YouTube's fragmented MP4 layout (tags and brand fixed up, audio untouched). All common players and
   taggers handle it; a few very old players may show the duration only after a full scan.
-- One download at a time, by design.
+- One download (or one batch) at a time, by design. A batch doesn't survive the app process being killed; downloaded
+  songs stay, the rest can be picked again.
+- Mixes are generated by YouTube per request, so the song list can differ between two loads of the same link, and
+  they're endless: the app stops at 200 songs. Personalised "My Mix" contents need sign-in; without it YouTube returns
+  a generic mix for the seed song.
