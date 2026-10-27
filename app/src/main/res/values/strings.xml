@@ -26,6 +26,28 @@
     <string name="no_player">No app installed that can play %1$s files.</string>
     <string name="no_file_manager">No file manager could open the folder. The file is in %1$s.</string>
 
+    <string name="link_hint">A video, mix, album or playlist link - or share one from the YouTube app</string>
+    <string name="valid_collection">%1$s link · pick the songs below</string>
+    <string name="whole_collection">Whole %1$s</string>
+    <string name="just_this_song">Just this song</string>
+    <string name="loading_collection">Loading %1$s…</string>
+    <string name="selected_count">%1$d of %2$d selected</string>
+    <string name="select_all">Select all</string>
+    <string name="select_none">Select none</string>
+    <string name="not_downloadable">not downloadable</string>
+    <string name="load_more">Load more</string>
+    <string name="list_capped">Showing the first %1$d songs</string>
+    <string name="download_selected">Download %1$d selected</string>
+    <string name="cancel_all">Cancel all</string>
+    <string name="batch_progress">Song %1$d of %2$d</string>
+    <string name="batch_summary">%1$d saved · %2$d failed</string>
+    <string name="batch_summary_full">%1$d saved · %2$d failed · %3$d cancelled</string>
+    <string name="retry_failed">Retry failed (%1$d)</string>
+    <string name="back_to_list">Back to the list</string>
+    <string name="status_queued">waiting</string>
+    <string name="status_cancelled">cancelled</string>
+    <string name="percent">%1$d%%</string>
+
     <string name="notice_title">Personal use only</string>
     <string name="notice_body">Only download content you have the right to: your own uploads, content under a licence that allows it (e.g. Creative Commons), or where personal copies are permitted by your local law. Respect creators and YouTube\'s terms. This app does not bypass paid or DRM-protected content.</string>
 

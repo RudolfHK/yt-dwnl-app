@@ -14,7 +14,9 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import io.github.rudolfhk.audiosaver.MainActivity
 import io.github.rudolfhk.audiosaver.R
+import io.github.rudolfhk.audiosaver.core.pipeline.BatchState
 import io.github.rudolfhk.audiosaver.core.pipeline.DownloadState
+import io.github.rudolfhk.audiosaver.core.pipeline.ItemStatus
 import io.github.rudolfhk.audiosaver.ui.formatBytes
 
 internal class DownloadNotifications(private val context: Context) {
@@ -81,6 +83,44 @@ internal class DownloadNotifications(private val context: Context) {
             else -> return // cancelled by the user, or nothing happened: no need to tell them
         }
         notify(RESULT_ID, notification)
+    }
+
+    /** "Song 3 of 12": overall bar = finished songs plus the current song's fraction. */
+    fun batchProgress(state: BatchState?): Notification {
+        val builder = base()
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setCategory(NotificationCompat.CATEGORY_PROGRESS)
+            .addAction(0, context.getString(R.string.cancel_all), cancelIntent())
+        if (state == null || state.total == 0) {
+            return builder.setContentTitle(context.getString(R.string.phase_resolving)).setProgress(0, 0, true).build()
+        }
+        val active = state.items.getOrNull(state.activeIndex)
+        val current = (active?.status as? ItemStatus.Active)?.progress
+        val currentFraction = (current as? DownloadState.Downloading)?.fraction ?: 0f
+        val overall = ((state.processedCount + currentFraction) / state.total * 1000).toInt()
+        val position = (state.activeIndex.takeIf { it >= 0 } ?: state.processedCount) + 1
+        return builder
+            .setContentTitle(context.getString(R.string.batch_progress, position.coerceAtMost(state.total), state.total))
+            .setContentText(active?.entry?.item?.title ?: state.title)
+            .setSubText(state.title)
+            .setProgress(1000, overall, false)
+            .build()
+    }
+
+    fun updateBatchProgress(state: BatchState) = notify(PROGRESS_ID, batchProgress(state))
+
+    fun batchResult(state: BatchState) {
+        if (state.savedCount == 0 && state.failedCount == 0) return // cancelled before anything happened
+        val summary = context.getString(R.string.batch_summary, state.savedCount, state.failedCount)
+        notify(
+            RESULT_ID,
+            base()
+                .setContentTitle(state.title)
+                .setContentText(summary)
+                .setAutoCancel(true)
+                .build(),
+        )
     }
 
     private fun base() = NotificationCompat.Builder(context, CHANNEL_ID)

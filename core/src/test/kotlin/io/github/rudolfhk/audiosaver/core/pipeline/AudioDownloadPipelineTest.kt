@@ -6,7 +6,9 @@ import io.github.rudolfhk.audiosaver.core.engine.AudioSaveException
 import io.github.rudolfhk.audiosaver.core.engine.AudioStreamSource
 import io.github.rudolfhk.audiosaver.core.engine.ExtractionEngine
 import io.github.rudolfhk.audiosaver.core.engine.FailureReason
+import io.github.rudolfhk.audiosaver.core.engine.PageToken
 import io.github.rudolfhk.audiosaver.core.engine.ResolvedAudio
+import io.github.rudolfhk.audiosaver.core.link.CollectionRef
 import io.github.rudolfhk.audiosaver.core.link.VideoId
 import io.github.rudolfhk.audiosaver.core.tag.TrackMetadata
 import kotlinx.coroutines.CancellationException
@@ -60,6 +62,8 @@ class AudioDownloadPipelineTest {
                     AudioStreamSource(server.url("/a").toString(), container, null, null, length),
                 )
             }
+
+            override suspend fun listCollection(ref: CollectionRef, page: PageToken?) = error("not used")
         }
 
     private fun pipeline(engine: ExtractionEngine, sink: AudioSink = DirectoryAudioSink(File(tmp.root, "Music"))) =
@@ -124,7 +128,7 @@ class AudioDownloadPipelineTest {
     @Test fun `a sink that reports the wrong size is not treated as success`() {
         server.enqueue(MockResponse.Builder().body(Buffer().write(m4a)).build())
         val lyingSink = object : AudioSink {
-            override suspend fun save(file: File, displayName: String, mimeType: String, metadata: TrackMetadata) =
+            override suspend fun save(file: File, displayName: String, mimeType: String, metadata: TrackMetadata, subfolder: String?) =
                 SavedAudio(displayName, "nowhere", "content://x/1", mimeType, sizeBytes = 0)
         }
         run(pipeline(engine(), lyingSink))
@@ -135,7 +139,7 @@ class AudioDownloadPipelineTest {
     @Test fun `storage exceptions become STORAGE failures`() {
         server.enqueue(MockResponse.Builder().body(Buffer().write(m4a)).build())
         val fullDisk = object : AudioSink {
-            override suspend fun save(file: File, displayName: String, mimeType: String, metadata: TrackMetadata): SavedAudio =
+            override suspend fun save(file: File, displayName: String, mimeType: String, metadata: TrackMetadata, subfolder: String?): SavedAudio =
                 throw java.io.IOException("No space left on device")
         }
         run(pipeline(engine(), fullDisk))
@@ -161,6 +165,8 @@ class AudioDownloadPipelineTest {
         assertEquals("Artist - Song (Official Video).m4a", FileNames.forTrack("Artist", "Artist - Song (Official Video)", "m4a"))
         assertEquals("What_ Why_.m4a", FileNames.forTrack(null, "What? Why?", "m4a"))
         assertEquals("audio.m4a", FileNames.forTrack(null, "...", "m4a"))
+        assertEquals("03 - Back In Black.m4a", FileNames.forTrack("AC/DC", "Back In Black", "m4a", trackNumber = 3))
+        assertEquals("Live_ Part 1", FileNames.forFolder("Live: Part 1"))
         assertEquals(124, FileNames.forTrack(null, "x".repeat(500), "m4a").length)
     }
 

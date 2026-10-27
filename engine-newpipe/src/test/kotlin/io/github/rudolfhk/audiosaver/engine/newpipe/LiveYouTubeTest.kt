@@ -3,7 +3,9 @@ package io.github.rudolfhk.audiosaver.engine.newpipe
 import io.github.rudolfhk.audiosaver.core.download.HttpAudioDownloader
 import io.github.rudolfhk.audiosaver.core.engine.AudioContainer
 import io.github.rudolfhk.audiosaver.core.engine.FailureReason
+import io.github.rudolfhk.audiosaver.core.link.LinkParseResult
 import io.github.rudolfhk.audiosaver.core.link.VideoId
+import io.github.rudolfhk.audiosaver.core.link.YouTubeLinkParser
 import io.github.rudolfhk.audiosaver.core.pipeline.AudioDownloadPipeline
 import io.github.rudolfhk.audiosaver.core.pipeline.DirectoryAudioSink
 import io.github.rudolfhk.audiosaver.core.pipeline.DownloadState
@@ -17,6 +19,7 @@ import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
@@ -61,5 +64,17 @@ class LiveYouTubeTest {
         val failed = assertIs<DownloadState.Failed>(states.last())
         println("Failure as the user sees it: ${failed.reason.userTitle} - ${failed.detail}")
         assertEquals(FailureReason.UNAVAILABLE, failed.reason)
+    }
+
+    @Test fun `lists the mix of a creative-commons video and pages further`() = runBlocking {
+        val ref = (YouTubeLinkParser.parse("https://www.youtube.com/watch?v=${creativeCommonsVideo}&list=RD$creativeCommonsVideo")
+            as LinkParseResult.Collection).ref
+        val first = engine.listCollection(ref)
+        println("Mix '${first.title}': ${first.items.size} items, more=${first.next != null}")
+        first.items.take(5).forEach { println("  ${it.videoId} ${it.title} - ${it.uploader}") }
+        assertTrue(first.items.size >= 5)
+        assertEquals(creativeCommonsVideo, first.items.first().videoId, "a mix starts with its seed")
+        val second = engine.listCollection(ref, assertNotNull(first.next))
+        assertTrue(second.items.isNotEmpty())
     }
 }

@@ -5,16 +5,24 @@ import io.github.rudolfhk.audiosaver.core.download.cancelOnCancellation
 import io.github.rudolfhk.audiosaver.core.engine.AudioContainer
 import io.github.rudolfhk.audiosaver.core.engine.AudioSaveException
 import io.github.rudolfhk.audiosaver.core.engine.AudioStreamSource
+import io.github.rudolfhk.audiosaver.core.engine.CollectionItem
+import io.github.rudolfhk.audiosaver.core.engine.CollectionPage
 import io.github.rudolfhk.audiosaver.core.engine.ExtractionEngine
 import io.github.rudolfhk.audiosaver.core.engine.FailureReason
+import io.github.rudolfhk.audiosaver.core.engine.PageToken
 import io.github.rudolfhk.audiosaver.core.engine.ResolvedAudio
+import io.github.rudolfhk.audiosaver.core.link.CollectionKind
+import io.github.rudolfhk.audiosaver.core.link.CollectionRef
+import io.github.rudolfhk.audiosaver.core.link.LinkParseResult
 import io.github.rudolfhk.audiosaver.core.link.VideoId
+import io.github.rudolfhk.audiosaver.core.link.YouTubeLinkParser
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import org.schabi.newpipe.extractor.MediaFormat
 import org.schabi.newpipe.extractor.NewPipe
+import org.schabi.newpipe.extractor.Page
 import org.schabi.newpipe.extractor.ServiceList
 import org.schabi.newpipe.extractor.exceptions.AccountTerminatedException
 import org.schabi.newpipe.extractor.exceptions.AgeRestrictedContentException
@@ -31,10 +39,14 @@ import org.schabi.newpipe.extractor.exceptions.UnsupportedContentInCountryExcept
 import org.schabi.newpipe.extractor.exceptions.YoutubeMusicPremiumContentException
 import org.schabi.newpipe.extractor.localization.ContentCountry
 import org.schabi.newpipe.extractor.localization.Localization
+import org.schabi.newpipe.extractor.playlist.PlaylistExtractor
+import org.schabi.newpipe.extractor.services.youtube.YoutubeParsingHelper
 import org.schabi.newpipe.extractor.stream.AudioStream
 import org.schabi.newpipe.extractor.stream.AudioTrackType
+import org.schabi.newpipe.extractor.stream.ContentAvailability
 import org.schabi.newpipe.extractor.stream.DeliveryMethod
 import org.schabi.newpipe.extractor.stream.StreamExtractor
+import org.schabi.newpipe.extractor.stream.StreamInfoItem
 import org.schabi.newpipe.extractor.stream.StreamType
 import java.io.IOException
 import java.time.ZoneOffset
@@ -56,15 +68,42 @@ class NewPipeExtractionEngine(
         initOnce(client, locale)
     }
 
-    override suspend fun resolve(videoId: VideoId): ResolvedAudio = withContext(Dispatchers.IO) {
+    override suspend fun resolve(videoId: VideoId): ResolvedAudio = extracting {
+        val extractor = ServiceList.YouTube.getStreamExtractor(videoId.watchUrl)
+        extractor.fetchPage()
+        toResolvedAudio(videoId, extractor)
+    }
+
+    override suspend fun listCollection(ref: CollectionRef, page: PageToken?): CollectionPage = extracting {
+        val continuation = page?.value as? Continuation
+        val extractor = continuation?.extractor
+            ?: ServiceList.YouTube.getPlaylistExtractor(ref.url).also { it.fetchPage() }
+        val itemsPage = if (continuation != null) extractor.getPage(continuation.page) else extractor.initialPage
+        val count = extractor.streamCount.takeIf { it >= 0 }
+        CollectionPage(
+            ref = ref,
+            title = cleanCollectionTitle(extractor.name, ref.kind),
+            uploader = runCatching { extractor.uploaderName }.getOrNull()?.takeIf { it.isNotBlank() }?.let(::cleanUploader),
+            items = itemsPage.items.mapNotNull(::toCollectionItem),
+            totalCount = count,
+            next = itemsPage.nextPage?.takeIf { itemsPage.hasNextPage() }?.let { PageToken(Continuation(extractor, it)) },
+        )
+    }
+
+    /** Next page = the same (already fetched) extractor + NewPipe's page cursor. In memory only. */
+    private class Continuation(val extractor: PlaylistExtractor, val page: Page)
+
+    /**
+     * Runs blocking NewPipeExtractor work on the IO pool such that cancelling the coroutine aborts the
+     * HTTP request the extractor is blocked on, and every failure leaves as an [AudioSaveException].
+     */
+    private suspend fun <T> extracting(block: () -> T): T = withContext(Dispatchers.IO) {
         val calls = CallGroup()
         cancelOnCancellation(calls) {
             runInterruptible {
                 OkHttpNewPipeDownloader.activeCallGroup.set(calls)
                 try {
-                    val extractor = ServiceList.YouTube.getStreamExtractor(videoId.watchUrl)
-                    extractor.fetchPage()
-                    toResolvedAudio(videoId, extractor)
+                    block()
                 } catch (e: AudioSaveException) {
                     throw e
                 } catch (e: InterruptedException) {
@@ -128,6 +167,10 @@ class NewPipeExtractionEngine(
                 Localization.fromLocale(locale),
                 ContentCountry(locale.country.ifEmpty { "US" }),
             )
+            // YouTube only serves Mixes (and some YouTube Music lists) in the EU when its SOCS consent
+            // cookie says "configured cookies"; with the default "rejected all" value mix extraction
+            // fails there. The app keeps no cookie jar, so this only changes that one request header.
+            YoutubeParsingHelper.setConsentAccepted(true)
             initialized = true
         }
 
@@ -146,6 +189,34 @@ class NewPipeExtractionEngine(
                         .thenByDescending { it.averageBitrate },
                 )
                 .firstOrNull()
+
+        private val PLACEHOLDER_TITLES = setOf("[Deleted video]", "[Private video]", "[Unavailable video]")
+
+        internal fun toCollectionItem(item: StreamInfoItem): CollectionItem? {
+            // Our own parser: NewPipe's stream link handler refuses URLs that also carry a list=,
+            // which is exactly how mix/playlist entries can be addressed.
+            val id = when (val parsed = YouTubeLinkParser.parse(item.url)) {
+                is LinkParseResult.Valid -> parsed.videoId
+                is LinkParseResult.Collection -> parsed.ref.seedVideoId ?: return null
+                is LinkParseResult.Invalid -> return null
+            }
+            val name = item.name.orEmpty()
+            val isLive = item.streamType == StreamType.LIVE_STREAM || item.streamType == StreamType.AUDIO_LIVE_STREAM
+            val restricted = item.contentAvailability.let {
+                it == ContentAvailability.MEMBERSHIP || it == ContentAvailability.PAID || it == ContentAvailability.UPCOMING
+            }
+            return CollectionItem(
+                videoId = id,
+                title = name.ifBlank { id.value },
+                uploader = item.uploaderName?.takeIf { it.isNotBlank() }?.let(::cleanUploader),
+                durationSeconds = item.duration.takeIf { it > 0 },
+                available = name !in PLACEHOLDER_TITLES && !isLive && !restricted,
+            )
+        }
+
+        /** YouTube names auto-generated album playlists "Album - <name>". */
+        internal fun cleanCollectionTitle(name: String, kind: CollectionKind): String =
+            if (kind == CollectionKind.ALBUM) name.removePrefix("Album - ").trim().ifEmpty { name } else name
 
         /** "Artist - Topic" is YouTube's auto-generated channel for a label upload; the artist is the part before. */
         internal fun cleanUploader(name: String): String? =

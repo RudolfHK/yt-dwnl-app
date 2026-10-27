@@ -1,5 +1,6 @@
 package io.github.rudolfhk.audiosaver.core.engine
 
+import io.github.rudolfhk.audiosaver.core.link.CollectionRef
 import io.github.rudolfhk.audiosaver.core.link.VideoId
 
 /**
@@ -20,7 +21,36 @@ interface ExtractionEngine {
     val description: String
 
     suspend fun resolve(videoId: VideoId): ResolvedAudio
+
+    /**
+     * Lists one page of a mix/album/playlist. Pass the previous page's [CollectionPage.next] to
+     * continue; null starts at the beginning. Mixes are endless - callers decide when to stop.
+     */
+    suspend fun listCollection(ref: CollectionRef, page: PageToken? = null): CollectionPage
 }
+
+/** Engine-specific continuation, opaque to everything outside the engine. */
+class PageToken(val value: Any)
+
+data class CollectionPage(
+    val ref: CollectionRef,
+    /** Display name, already cleaned (e.g. YouTube's "Album - " prefix removed for albums). */
+    val title: String,
+    val uploader: String?,
+    val items: List<CollectionItem>,
+    /** Total size if YouTube says so; null for mixes (endless) or when unknown. */
+    val totalCount: Long?,
+    val next: PageToken?,
+)
+
+data class CollectionItem(
+    val videoId: VideoId,
+    val title: String,
+    val uploader: String?,
+    val durationSeconds: Long?,
+    /** False for "[Deleted video]" / "[Private video]" placeholders: listed, but not selectable. */
+    val available: Boolean = true,
+)
 
 data class ResolvedAudio(
     val videoId: VideoId,

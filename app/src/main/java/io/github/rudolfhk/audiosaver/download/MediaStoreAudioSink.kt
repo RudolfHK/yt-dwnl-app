@@ -17,7 +17,7 @@ import java.io.File
 import java.io.IOException
 
 /**
- * Saves into the shared Music collection (Music/AudioSaver) via MediaStore - no storage permission
+ * Saves into the shared Music collection (Music/AudioSaver, or Music/AudioSaver/<Album>) via MediaStore - no storage permission
  * needed on API 29+. The entry is created with IS_PENDING=1 so other apps never see a half-written
  * file, and on any failure or cancel the entry is deleted again.
  */
@@ -25,17 +25,25 @@ class MediaStoreAudioSink(context: Context) : AudioSink {
 
     private val resolver = context.applicationContext.contentResolver
 
-    override suspend fun save(file: File, displayName: String, mimeType: String, metadata: TrackMetadata): SavedAudio =
+    override suspend fun save(
+        file: File,
+        displayName: String,
+        mimeType: String,
+        metadata: TrackMetadata,
+        subfolder: String?,
+    ): SavedAudio =
         withContext(Dispatchers.IO) {
+            // subfolder is already sanitised by the pipeline (album names can contain anything)
+            val relativePath = subfolder?.let { "$RELATIVE_PATH/$it" } ?: RELATIVE_PATH
             val collection = MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
             val pending = ContentValues().apply {
                 put(MediaStore.MediaColumns.DISPLAY_NAME, displayName)
                 put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
-                put(MediaStore.MediaColumns.RELATIVE_PATH, RELATIVE_PATH)
+                put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath)
                 put(MediaStore.MediaColumns.IS_PENDING, 1)
             }
             val uri = resolver.insert(collection, pending)
-                ?: throw IOException("MediaStore refused to create \"$displayName\" in $RELATIVE_PATH")
+                ?: throw IOException("MediaStore refused to create \"$displayName\" in $relativePath")
             try {
                 copyInto(uri, file)
                 resolver.update(uri, ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }, null, null)

@@ -120,6 +120,30 @@ class Mp4TaggerTest {
         assertEquals(decodedMd5(input), decodedMd5(twice))
     }
 
+    @Test fun `album tags and track numbers`() {
+        val input = fixture("album.m4a", "-f", "mp4", "-movflags", "+dash+global_sidx", "-frag_duration", "1000000", "-brand", "dash")
+        val output = File(tmp.root, "album-tagged.m4a")
+        Mp4Tagger.tag(
+            input, output,
+            metadata.copy(album = "Whenever You Need Somebody", albumArtist = "Rick Astley", trackNumber = 3, trackTotal = 10),
+        )
+        val tags = probeTags(output)
+        assertEquals("Whenever You Need Somebody", tags["album"])
+        assertEquals("Rick Astley", tags["album_artist"])
+        assertEquals("Some Artist", tags["artist"])
+        assertEquals("3/10", tags["track"])
+        assertEquals(decodedMd5(input), decodedMd5(output))
+    }
+
+    @Test fun `no album fields for mixes`() {
+        val input = fixture("mix.m4a", "-f", "mp4", "-movflags", "+faststart")
+        val output = File(tmp.root, "mix-tagged.m4a")
+        Mp4Tagger.tag(input, output, metadata)
+        val tags = probeTags(output)
+        assertEquals(null, tags["album"])
+        assertEquals(null, tags["track"])
+    }
+
     @Test fun `non mp4 input is rejected cleanly`() {
         val junk = tmp.newFile("junk.m4a").apply { writeText("<html>403 Forbidden</html>") }
         assertFailsWith<TaggingException> { Mp4Tagger.tag(junk, File(tmp.root, "out.m4a"), metadata) }

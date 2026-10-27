@@ -13,12 +13,18 @@ data class TrackMetadata(
     val artist: String?,
     val year: Int?,
     val comment: String?,
+    /** Only for real albums; a mix or playlist is not an album and leaves this null. */
+    val album: String? = null,
+    /** Defaults to [artist] when null. */
+    val albumArtist: String? = null,
+    val trackNumber: Int? = null,
+    val trackTotal: Int? = null,
 )
 
 class TaggingException(message: String) : IOException(message)
 
 /**
- * Embeds iTunes-style metadata (`moov/udta/meta/ilst`) into an MP4/M4A audio file, which is what
+ * Embeds iTunes-style metadata (title, artist, album artist, album, year, comment, track number) (`moov/udta/meta/ilst`) into an MP4/M4A audio file, which is what
  * Android's MediaStore scanner, Navidrome/TagLib, foobar2000, iTunes etc. read for M4A. (ID3 is the
  * MP3 equivalent and is not read from MP4 files.)
  *
@@ -164,9 +170,16 @@ object Mp4Tagger {
         }
         item("©nam", metadata.title)
         item("©ART", metadata.artist)
-        item("aART", metadata.artist)
+        item("aART", metadata.albumArtist ?: metadata.artist)
+        item("©alb", metadata.album)
         item("©day", metadata.year?.toString())
         item("©cmt", metadata.comment)
+        metadata.trackNumber?.takeIf { it in 1..0xFFFF }?.let { track ->
+            // trkn: binary (type 0) payload = reserved(2) track(2) total(2) reserved(2)
+            val total = metadata.trackTotal?.takeIf { it in track..0xFFFF } ?: 0
+            val payload = ByteBuffer.allocate(8).putShort(0).putShort(track.toShort()).putShort(total.toShort()).putShort(0).array()
+            items.write(box("trkn", box("data", ByteArray(8) + payload)))
+        }
         val ilst = box("ilst", items.toByteArray())
         return box("meta", ByteArray(4) + hdlr + ilst)
     }

@@ -17,7 +17,11 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import io.github.rudolfhk.audiosaver.ui.AudioSaverTheme
 import io.github.rudolfhk.audiosaver.ui.FileActions
+import io.github.rudolfhk.audiosaver.core.link.VideoId
+import io.github.rudolfhk.audiosaver.core.pipeline.SavedAudio
+import io.github.rudolfhk.audiosaver.ui.MainActions
 import io.github.rudolfhk.audiosaver.ui.MainScreen
+import io.github.rudolfhk.audiosaver.ui.MainUiState
 import io.github.rudolfhk.audiosaver.ui.MainViewModel
 
 class MainActivity : ComponentActivity() {
@@ -26,6 +30,23 @@ class MainActivity : ComponentActivity() {
         viewModelFactory { initializer { MainViewModel(audioSaverApp.controller) } }
     }
     private var askedForNotifications = false
+
+    private val actions = object : MainActions {
+        override fun onInputChanged(text: String) = viewModel.onInputChanged(text)
+        override fun onDownload() = onDownloadClicked()
+        override fun onCancel() = viewModel.cancel()
+        override fun onRetry(videoId: VideoId) = viewModel.retry(this@MainActivity, videoId)
+        override fun onPlay(saved: SavedAudio) = FileActions.play(this@MainActivity, saved)
+        override fun onShare(saved: SavedAudio) = FileActions.share(this@MainActivity, saved)
+        override fun onOpenFolder(saved: SavedAudio) = FileActions.openFolder(this@MainActivity, saved)
+        override fun onJustThisSong(value: Boolean) = viewModel.setJustThisSong(value)
+        override fun onToggle(videoId: VideoId) = viewModel.toggle(videoId)
+        override fun onSelectAll(all: Boolean) = viewModel.selectAll(all)
+        override fun onLoadMore() = viewModel.loadMore()
+        override fun onReloadCollection() = viewModel.reloadCollection()
+        override fun onRetryFailed() = viewModel.retryFailed(this@MainActivity)
+        override fun onDismissBatch() = viewModel.dismissBatch()
+    }
 
     /** Asked once, on the first download. Declining only hides the notification. */
     private val notificationPermission =
@@ -38,21 +59,14 @@ class MainActivity : ComponentActivity() {
         setContent {
             val input by viewModel.input.collectAsStateWithLifecycle()
             val parsed by viewModel.parsed.collectAsStateWithLifecycle()
+            val target by viewModel.target.collectAsStateWithLifecycle()
+            val justThisSong by viewModel.justThisSong.collectAsStateWithLifecycle()
             val download by viewModel.download.collectAsStateWithLifecycle()
+            val collection by viewModel.collection.collectAsStateWithLifecycle()
+            val batch by viewModel.batch.collectAsStateWithLifecycle()
 
             AudioSaverTheme {
-                MainScreen(
-                    input = input,
-                    parsed = parsed,
-                    download = download,
-                    onInputChanged = viewModel::onInputChanged,
-                    onDownload = ::onDownloadClicked,
-                    onCancel = viewModel::cancel,
-                    onRetry = { viewModel.retry(this, it) },
-                    onPlay = { FileActions.play(this, it) },
-                    onShare = { FileActions.share(this, it) },
-                    onOpenFolder = { FileActions.openFolder(this, it) },
-                )
+                MainScreen(MainUiState(input, parsed, target, justThisSong, download, collection, batch), actions)
             }
         }
         // Only on a fresh launch: after rotation the ViewModel already holds the text.

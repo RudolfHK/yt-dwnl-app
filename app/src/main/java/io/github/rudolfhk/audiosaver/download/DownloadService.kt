@@ -9,7 +9,9 @@ import androidx.core.app.ServiceCompat
 import io.github.rudolfhk.audiosaver.audioSaverApp
 import io.github.rudolfhk.audiosaver.core.engine.FailureReason
 import io.github.rudolfhk.audiosaver.core.link.VideoId
+import io.github.rudolfhk.audiosaver.core.pipeline.BatchState
 import io.github.rudolfhk.audiosaver.core.pipeline.DownloadState
+import io.github.rudolfhk.audiosaver.core.pipeline.ItemStatus
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -18,8 +20,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 
 /**
- * Foreground service (type dataSync) that runs one [io.github.rudolfhk.audiosaver.core.pipeline.AudioDownloadPipeline]
- * job. Being in the foreground is what keeps a multi-minute download alive when the user leaves the app
+ * Foreground service (type dataSync) that runs one single-song download or one batch from a mix/album. Being in the foreground is what keeps a multi-minute download alive when the user leaves the app
  * or the screen turns off; the notification mirrors the in-app progress and offers Cancel.
  */
 class DownloadService : Service() {
@@ -66,7 +67,7 @@ class DownloadService : Service() {
                                 DownloadState.Failed(
                                     videoId,
                                     FailureReason.DOWNLOAD_FAILED,
-                                    "Android stopped the background download (foreground-service time limit reached).",
+                                    TIME_LIMIT_MESSAGE,
                                 )
                             } else {
                                 reported
@@ -76,6 +77,32 @@ class DownloadService : Service() {
                         }
                     } finally {
                         finish(controller.state.value)
+                    }
+                }.also(controller::attach)
+            }
+            ACTION_START_BATCH -> {
+                ServiceCompat.startForeground(
+                    this,
+                    DownloadNotifications.PROGRESS_ID,
+                    notifications.batchProgress(controller.batch.value),
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+                )
+                if (job?.isActive == true) return START_NOT_STICKY
+                val request = controller.takePendingBatch()
+                if (request == null) {
+                    finish(controller.state.value)
+                    return START_NOT_STICKY
+                }
+                timedOut = false
+                job = scope.launch {
+                    try {
+                        controller.batchDownloader.run(request) { reported ->
+                            val state = if (reported.finished && timedOut) withTimeLimitReason(reported) else reported
+                            controller.publishBatch(state)
+                            if (!state.finished) notifications.updateBatchProgress(state)
+                        }
+                    } finally {
+                        finishBatch(controller.batch.value)
                     }
                 }.also(controller::attach)
             }
@@ -91,6 +118,23 @@ class DownloadService : Service() {
         stopSelf()
     }
 
+    private fun finishBatch(finalState: BatchState?) {
+        ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+        finalState?.let(notifications::batchResult)
+        stopSelf()
+    }
+
+    /** Songs the OS cut off are failures with a reason, not something the user cancelled. */
+    private fun withTimeLimitReason(state: BatchState): BatchState = state.copy(
+        items = state.items.map {
+            if (it.status is ItemStatus.Cancelled) {
+                it.copy(status = ItemStatus.Failed(FailureReason.DOWNLOAD_FAILED, TIME_LIMIT_MESSAGE))
+            } else {
+                it
+            }
+        },
+    )
+
     /** Android 15+: dataSync services get ~6 h/day. A single song never gets close, but honour it. */
     override fun onTimeout(startId: Int, fgsType: Int) {
         timedOut = true
@@ -104,6 +148,9 @@ class DownloadService : Service() {
 
     companion object {
         private const val ACTION_START = "io.github.rudolfhk.audiosaver.START"
+        private const val ACTION_START_BATCH = "io.github.rudolfhk.audiosaver.START_BATCH"
+        private const val TIME_LIMIT_MESSAGE =
+            "Android stopped the background download (foreground-service time limit reached)."
         const val ACTION_CANCEL = "io.github.rudolfhk.audiosaver.CANCEL"
         private const val EXTRA_VIDEO_ID = "videoId"
 
@@ -111,6 +158,10 @@ class DownloadService : Service() {
             Intent(context, DownloadService::class.java)
                 .setAction(ACTION_START)
                 .putExtra(EXTRA_VIDEO_ID, videoId.value)
+
+        /** The batch itself is handed over through [DownloadController]; it can be too big for an Intent. */
+        fun startBatchIntent(context: Context): Intent =
+            Intent(context, DownloadService::class.java).setAction(ACTION_START_BATCH)
 
         fun cancelIntent(context: Context): Intent =
             Intent(context, DownloadService::class.java).setAction(ACTION_CANCEL)

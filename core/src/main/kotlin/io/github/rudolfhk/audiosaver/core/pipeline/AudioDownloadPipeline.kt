@@ -22,7 +22,24 @@ interface AudioSink {
      * Copies [file] into permanent storage and returns what actually landed there, read back from
      * the storage itself (not just echoed from the request).
      */
-    suspend fun save(file: File, displayName: String, mimeType: String, metadata: TrackMetadata): SavedAudio
+    suspend fun save(file: File, displayName: String, mimeType: String, metadata: TrackMetadata, subfolder: String? = null): SavedAudio
+}
+
+/**
+ * Where a track sits when it's downloaded as part of a collection. Only albums carry album fields;
+ * a mix or playlist is not an album, so its tracks are tagged exactly like single downloads.
+ */
+data class TrackContext(
+    val album: String? = null,
+    val albumArtist: String? = null,
+    val trackNumber: Int? = null,
+    val trackTotal: Int? = null,
+    /** Sub-folder below the app's music folder, e.g. the album name. Sanitised by the pipeline. */
+    val subfolder: String? = null,
+) {
+    companion object {
+        val NONE = TrackContext()
+    }
 }
 
 data class SavedAudio(
@@ -64,7 +81,7 @@ class AudioDownloadPipeline(
     private val workDir: File,
 ) {
 
-    suspend fun run(videoId: VideoId, onState: (DownloadState) -> Unit) {
+    suspend fun run(videoId: VideoId, context: TrackContext = TrackContext.NONE, onState: (DownloadState) -> Unit) {
         val raw = File(workDir, "$videoId.part")
         val tagged = File(workDir, "$videoId.tagged")
         try {
@@ -79,11 +96,11 @@ class AudioDownloadPipeline(
             progress.flush()
 
             onState(DownloadState.Saving(videoId, audio.title))
-            val metadata = metadataFor(audio)
+            val metadata = metadataFor(audio, context)
             val (fileToSave, taggingWarning) = withContext(Dispatchers.IO) { tagIfPossible(audio, raw, tagged, metadata) }
-            val fileName = FileNames.forTrack(metadata.artist, metadata.title, audio.stream.container.extension)
+            val fileName = FileNames.forTrack(metadata.artist, metadata.title, audio.stream.container.extension, context.trackNumber)
             val saved = try {
-                sink.save(fileToSave, fileName, audio.stream.container.mimeType, metadata)
+                sink.save(fileToSave, fileName, audio.stream.container.mimeType, metadata, context.subfolder?.let(FileNames::forFolder))
             } catch (e: IOException) {
                 throw AudioSaveException(FailureReason.STORAGE, e.message ?: e::class.java.simpleName, e)
             } catch (e: SecurityException) {
@@ -110,11 +127,15 @@ class AudioDownloadPipeline(
         }
     }
 
-    private fun metadataFor(audio: ResolvedAudio) = TrackMetadata(
+    private fun metadataFor(audio: ResolvedAudio, context: TrackContext) = TrackMetadata(
         title = audio.title,
         artist = audio.uploader,
         year = audio.uploadYear,
         comment = audio.videoId.watchUrl,
+        album = context.album,
+        albumArtist = context.albumArtist,
+        trackNumber = context.trackNumber,
+        trackTotal = context.trackTotal,
     )
 
     private fun tagIfPossible(audio: ResolvedAudio, raw: File, tagged: File, metadata: TrackMetadata): Pair<File, String?> {
@@ -166,14 +187,24 @@ class AudioDownloadPipeline(
     }
 }
 
-internal object FileNames {
+object FileNames {
     private val ILLEGAL = Regex("""[\\/:*?"<>|\u0000-\u001F\u007F]""")
     private const val MAX_BASE_LENGTH = 120
 
-    fun forTrack(artist: String?, title: String, extension: String): String {
-        val base = listOfNotNull(artist?.takeIf { it.isNotBlank() && !title.contains(it, ignoreCase = true) }, title)
-            .joinToString(" - ")
-        val clean = ILLEGAL.replace(base, "_").replace(Regex("\\s+"), " ").trim().trim('.').ifEmpty { "audio" }
-        return clean.take(MAX_BASE_LENGTH).trimEnd() + "." + extension
+    /** "Artist - Title.m4a", or "03 - Title.m4a" inside an album folder. */
+    fun forTrack(artist: String?, title: String, extension: String, trackNumber: Int? = null): String {
+        val base = if (trackNumber != null) {
+            "%02d - %s".format(trackNumber, title)
+        } else {
+            listOfNotNull(artist?.takeIf { it.isNotBlank() && !title.contains(it, ignoreCase = true) }, title)
+                .joinToString(" - ")
+        }
+        return clean(base, "audio") + "." + extension
     }
+
+    fun forFolder(name: String): String = clean(name, "Untitled")
+
+    private fun clean(base: String, fallback: String): String =
+        ILLEGAL.replace(base, "_").replace(Regex("\\s+"), " ").trim().trim('.').ifEmpty { fallback }
+            .take(MAX_BASE_LENGTH).trimEnd()
 }

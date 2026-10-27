@@ -1,6 +1,7 @@
 package io.github.rudolfhk.audiosaver.engine.newpipe
 
 import io.github.rudolfhk.audiosaver.core.engine.FailureReason
+import io.github.rudolfhk.audiosaver.core.link.CollectionKind
 import org.schabi.newpipe.extractor.MediaFormat
 import org.schabi.newpipe.extractor.exceptions.AgeRestrictedContentException
 import org.schabi.newpipe.extractor.exceptions.ContentNotAvailableException
@@ -12,7 +13,10 @@ import org.schabi.newpipe.extractor.exceptions.ReCaptchaException
 import org.schabi.newpipe.extractor.exceptions.SignInConfirmNotBotException
 import org.schabi.newpipe.extractor.stream.AudioStream
 import org.schabi.newpipe.extractor.stream.AudioTrackType
+import org.schabi.newpipe.extractor.stream.ContentAvailability
 import org.schabi.newpipe.extractor.stream.DeliveryMethod
+import org.schabi.newpipe.extractor.stream.StreamInfoItem
+import org.schabi.newpipe.extractor.stream.StreamType
 import java.net.SocketTimeoutException
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -84,5 +88,35 @@ class NewPipeExtractionEngineTest {
         assertEquals("251", NewPipeExtractionEngine.chooseStream(listOf(stream("251", MediaFormat.WEBMA_OPUS, 160_000)))?.id)
         assertNull(NewPipeExtractionEngine.chooseStream(listOf(stream("hls", MediaFormat.M4A, 1, delivery = DeliveryMethod.HLS))))
         assertNull(NewPipeExtractionEngine.chooseStream(emptyList()))
+    }
+
+    private fun info(url: String, name: String, type: StreamType = StreamType.VIDEO_STREAM, availability: ContentAvailability? = null) =
+        StreamInfoItem(0, url, name, type).apply {
+            uploaderName = "Rick Astley - Topic"
+            duration = 213
+            availability?.let { contentAvailability = it }
+        }
+
+    @Test fun `playlist entries become collection items`() {
+        val item = NewPipeExtractionEngine.toCollectionItem(info("https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=RDdQw4w9WgXcQ&index=1", "Never Gonna Give You Up"))!!
+        assertEquals("dQw4w9WgXcQ", item.videoId.value)
+        assertEquals("Rick Astley", item.uploader)
+        assertEquals(213L, item.durationSeconds)
+        assertTrue(item.available)
+    }
+
+    @Test fun `placeholders, live streams and paid entries are listed but not selectable`() {
+        val url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+        assertEquals(false, NewPipeExtractionEngine.toCollectionItem(info(url, "[Deleted video]"))!!.available)
+        assertEquals(false, NewPipeExtractionEngine.toCollectionItem(info(url, "[Private video]"))!!.available)
+        assertEquals(false, NewPipeExtractionEngine.toCollectionItem(info(url, "Live", StreamType.LIVE_STREAM))!!.available)
+        assertEquals(false, NewPipeExtractionEngine.toCollectionItem(info(url, "Members", availability = ContentAvailability.MEMBERSHIP))!!.available)
+        assertNull(NewPipeExtractionEngine.toCollectionItem(info("https://www.youtube.com/channel/UC123", "not a video")))
+    }
+
+    @Test fun `album titles lose youtube's prefix, other lists keep their name`() {
+        assertEquals("Whenever You Need Somebody", NewPipeExtractionEngine.cleanCollectionTitle("Album - Whenever You Need Somebody", CollectionKind.ALBUM))
+        assertEquals("Mix - Rick Astley", NewPipeExtractionEngine.cleanCollectionTitle("Mix - Rick Astley", CollectionKind.MIX))
+        assertEquals("Album - Best of", NewPipeExtractionEngine.cleanCollectionTitle("Album - Best of", CollectionKind.PLAYLIST))
     }
 }

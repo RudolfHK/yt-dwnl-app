@@ -4,6 +4,7 @@ import android.app.Application
 import io.github.rudolfhk.audiosaver.core.download.HttpAudioDownloader
 import io.github.rudolfhk.audiosaver.core.engine.ExtractionEngine
 import io.github.rudolfhk.audiosaver.core.pipeline.AudioDownloadPipeline
+import io.github.rudolfhk.audiosaver.core.pipeline.BatchDownloader
 import io.github.rudolfhk.audiosaver.download.DownloadController
 import io.github.rudolfhk.audiosaver.download.MediaStoreAudioSink
 import io.github.rudolfhk.audiosaver.engine.newpipe.NewPipeExtractionEngine
@@ -23,14 +24,13 @@ class AudioSaverApp : Application() {
         // The one line to change when swapping the YouTube extraction library.
         val engine: ExtractionEngine = NewPipeExtractionEngine(http)
 
-        DownloadController(
-            AudioDownloadPipeline(
-                engine = engine,
-                downloader = HttpAudioDownloader(http),
-                sink = MediaStoreAudioSink(this),
-                workDir = File(cacheDir, "downloads"),
-            ),
+        val pipeline = AudioDownloadPipeline(
+            engine = engine,
+            downloader = HttpAudioDownloader(http),
+            sink = MediaStoreAudioSink(this),
+            workDir = File(cacheDir, "downloads"),
         )
+        DownloadController(engine, pipeline, BatchDownloader(pipeline))
     }
 }
 

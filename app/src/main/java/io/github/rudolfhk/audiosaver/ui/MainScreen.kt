@@ -6,25 +6,28 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -39,74 +42,151 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import io.github.rudolfhk.audiosaver.R
+import io.github.rudolfhk.audiosaver.core.collection.CollectionListing
+import io.github.rudolfhk.audiosaver.core.engine.CollectionItem
+import io.github.rudolfhk.audiosaver.core.engine.CollectionPage
 import io.github.rudolfhk.audiosaver.core.engine.FailureReason
+import io.github.rudolfhk.audiosaver.core.engine.PageToken
 import io.github.rudolfhk.audiosaver.core.link.LinkParseResult
 import io.github.rudolfhk.audiosaver.core.link.VideoId
 import io.github.rudolfhk.audiosaver.core.link.YouTubeLinkParser
+import io.github.rudolfhk.audiosaver.core.pipeline.BatchState
 import io.github.rudolfhk.audiosaver.core.pipeline.DownloadState
 import io.github.rudolfhk.audiosaver.core.pipeline.SavedAudio
 
-@Composable
-fun MainScreen(
-    input: String,
-    parsed: LinkParseResult,
-    download: DownloadState,
-    onInputChanged: (String) -> Unit,
-    onDownload: () -> Unit,
-    onCancel: () -> Unit,
-    onRetry: (VideoId) -> Unit,
-    onPlay: (SavedAudio) -> Unit,
-    onShare: (SavedAudio) -> Unit,
-    onOpenFolder: (SavedAudio) -> Unit,
+/** Everything the screen shows, gathered so the composable has one input instead of ten. */
+data class MainUiState(
+    val input: String,
+    val parsed: LinkParseResult,
+    val target: Target,
+    val justThisSong: Boolean,
+    val download: DownloadState,
+    val collection: CollectionUi,
+    val batch: BatchState?,
 ) {
-    val context = LocalContext.current
-    val canDownload = parsed is LinkParseResult.Valid && !download.isActive
+    val busy: Boolean get() = download.isActive || batch?.isActive == true
+}
 
-    Scaffold { padding ->
-        Column(
+interface MainActions {
+    fun onInputChanged(text: String)
+    fun onDownload()
+    fun onCancel()
+    fun onRetry(videoId: VideoId)
+    fun onPlay(saved: SavedAudio)
+    fun onShare(saved: SavedAudio)
+    fun onOpenFolder(saved: SavedAudio)
+    fun onJustThisSong(value: Boolean)
+    fun onToggle(videoId: VideoId)
+    fun onSelectAll(all: Boolean)
+    fun onLoadMore()
+    fun onReloadCollection()
+    fun onRetryFailed()
+    fun onDismissBatch()
+}
+
+@Composable
+fun MainScreen(state: MainUiState, actions: MainActions) {
+    val context = LocalContext.current
+    val isCollection = state.target is Target.Collection
+    val loadedListing = (state.collection as? CollectionUi.Loaded)?.listing
+    val canDownloadSingle = state.target is Target.Single && !state.busy
+
+    Scaffold(
+        bottomBar = {
+            // Pinned, so "Download 25 songs" stays reachable at the bottom of a long mix.
+            if (isCollection && loadedListing != null && state.batch == null) {
+                Surface(tonalElevation = 3.dp) {
+                    Button(
+                        onClick = actions::onDownload,
+                        enabled = loadedListing.selectedCount > 0 && !state.busy,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .navigationBarsPadding()
+                            .padding(horizontal = 20.dp, vertical = 12.dp),
+                    ) {
+                        Text(stringResource(R.string.download_selected, loadedListing.selectedCount))
+                    }
+                }
+            }
+        },
+    ) { padding ->
+        LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(padding)
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 20.dp, vertical = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+                .padding(padding),
+            contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Text(stringResource(R.string.app_name), style = MaterialTheme.typography.headlineMedium)
+            item { Text(stringResource(R.string.app_name), style = MaterialTheme.typography.headlineMedium) }
 
-            OutlinedTextField(
-                value = input,
-                onValueChange = onInputChanged,
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text(stringResource(R.string.link_label)) },
-                placeholder = { Text(stringResource(R.string.link_placeholder)) },
-                singleLine = true,
-                enabled = !download.isActive,
-                isError = input.isNotBlank() && parsed is LinkParseResult.Invalid,
-                supportingText = { ValidationText(input, parsed) },
-                trailingIcon = {
-                    if (input.isEmpty()) {
-                        TextButton(onClick = { clipboardText(context)?.let(onInputChanged) }, enabled = !download.isActive) {
-                            Text(stringResource(R.string.paste))
+            item {
+                OutlinedTextField(
+                    value = state.input,
+                    onValueChange = actions::onInputChanged,
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text(stringResource(R.string.link_label)) },
+                    placeholder = { Text(stringResource(R.string.link_placeholder)) },
+                    singleLine = true,
+                    enabled = !state.busy,
+                    isError = state.input.isNotBlank() && state.parsed is LinkParseResult.Invalid,
+                    supportingText = { ValidationText(state.input, state.parsed) },
+                    trailingIcon = {
+                        if (state.input.isEmpty()) {
+                            TextButton(onClick = { clipboardText(context)?.let(actions::onInputChanged) }, enabled = !state.busy) {
+                                Text(stringResource(R.string.paste))
+                            }
+                        } else {
+                            TextButton(onClick = { actions.onInputChanged("") }, enabled = !state.busy) {
+                                Text(stringResource(R.string.clear))
+                            }
                         }
-                    } else {
-                        TextButton(onClick = { onInputChanged("") }, enabled = !download.isActive) {
-                            Text(stringResource(R.string.clear))
-                        }
-                    }
-                },
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Go),
-                keyboardActions = KeyboardActions(onGo = { if (canDownload) onDownload() }),
-            )
-
-            Button(onClick = onDownload, enabled = canDownload, modifier = Modifier.fillMaxWidth()) {
-                Text(stringResource(R.string.download))
+                    },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Go),
+                    keyboardActions = KeyboardActions(onGo = { if (canDownloadSingle) actions.onDownload() }),
+                )
             }
 
-            StatusCard(download, onCancel, onRetry, onPlay, onShare, onOpenFolder)
+            val collectionLink = (state.parsed as? LinkParseResult.Collection)?.ref
+            if (collectionLink?.seedVideoId != null) {
+                item { ModeChooser(collectionLink.kind.label, state.justThisSong, enabled = !state.busy, onChange = actions::onJustThisSong) }
+            }
 
-            Spacer(Modifier.height(8.dp))
-            LegalNotice()
+            if (isCollection) {
+                collectionSection(state, actions)
+            } else {
+                item {
+                    Button(onClick = actions::onDownload, enabled = canDownloadSingle, modifier = Modifier.fillMaxWidth()) {
+                        Text(stringResource(R.string.download))
+                    }
+                }
+                item {
+                    StatusCard(state.download, actions::onCancel, actions::onRetry, actions::onPlay, actions::onShare, actions::onOpenFolder)
+                }
+            }
+
+            item {
+                Spacer(Modifier.height(8.dp))
+                LegalNotice()
+            }
         }
+    }
+}
+
+@Composable
+private fun ModeChooser(kindLabel: String, justThisSong: Boolean, enabled: Boolean, onChange: (Boolean) -> Unit) {
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FilterChip(
+            selected = !justThisSong,
+            onClick = { onChange(false) },
+            enabled = enabled,
+            label = { Text(stringResource(R.string.whole_collection, kindLabel.lowercase())) },
+        )
+        FilterChip(
+            selected = justThisSong,
+            onClick = { onChange(true) },
+            enabled = enabled,
+            label = { Text(stringResource(R.string.just_this_song)) },
+        )
     }
 }
 
@@ -115,8 +195,10 @@ private fun ValidationText(input: String, parsed: LinkParseResult) {
     when {
         parsed is LinkParseResult.Valid ->
             Text(stringResource(R.string.valid_link, parsed.videoId.value), color = MaterialTheme.colorScheme.primary)
+        parsed is LinkParseResult.Collection ->
+            Text(stringResource(R.string.valid_collection, parsed.ref.kind.label), color = MaterialTheme.colorScheme.primary)
         input.isNotBlank() && parsed is LinkParseResult.Invalid -> Text(parsed.message)
-        else -> Text("youtube.com/watch?v=…, youtu.be/…, /shorts/…, or share from the YouTube app")
+        else -> Text(stringResource(R.string.link_hint))
     }
 }
 
@@ -230,7 +312,7 @@ private fun StatusCard(
 }
 
 @Composable
-private fun PhaseHeader(title: String, subtitle: String) {
+internal fun PhaseHeader(title: String, subtitle: String) {
     Column {
         Text(title, style = MaterialTheme.typography.titleMedium)
         Text(subtitle, style = MaterialTheme.typography.bodyMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -260,16 +342,41 @@ private fun clipboardText(context: Context): String? {
     return clipboard.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(context)?.toString()
 }
 
+private object NoActions : MainActions {
+    override fun onInputChanged(text: String) = Unit
+    override fun onDownload() = Unit
+    override fun onCancel() = Unit
+    override fun onRetry(videoId: VideoId) = Unit
+    override fun onPlay(saved: SavedAudio) = Unit
+    override fun onShare(saved: SavedAudio) = Unit
+    override fun onOpenFolder(saved: SavedAudio) = Unit
+    override fun onJustThisSong(value: Boolean) = Unit
+    override fun onToggle(videoId: VideoId) = Unit
+    override fun onSelectAll(all: Boolean) = Unit
+    override fun onLoadMore() = Unit
+    override fun onReloadCollection() = Unit
+    override fun onRetryFailed() = Unit
+    override fun onDismissBatch() = Unit
+}
+
+private fun previewState(link: String, download: DownloadState = DownloadState.Idle, collection: CollectionUi = CollectionUi.Hidden): MainUiState {
+    val parsed = YouTubeLinkParser.parse(link)
+    val target = when (parsed) {
+        is LinkParseResult.Valid -> Target.Single(parsed.videoId)
+        is LinkParseResult.Collection -> Target.Collection(parsed.ref)
+        is LinkParseResult.Invalid -> Target.None
+    }
+    return MainUiState(link, parsed, target, justThisSong = false, download = download, collection = collection, batch = null)
+}
+
 @Preview(showBackground = true)
 @Composable
 private fun PreviewDownloading() {
     val id = VideoId.of("dQw4w9WgXcQ")
     AudioSaverTheme {
         MainScreen(
-            input = "https://youtu.be/dQw4w9WgXcQ",
-            parsed = YouTubeLinkParser.parse("https://youtu.be/dQw4w9WgXcQ"),
-            download = DownloadState.Downloading(id, "Never Gonna Give You Up", 2_400_000, 3_400_000),
-            onInputChanged = {}, onDownload = {}, onCancel = {}, onRetry = {}, onPlay = {}, onShare = {}, onOpenFolder = {},
+            previewState("https://youtu.be/dQw4w9WgXcQ", DownloadState.Downloading(id, "Never Gonna Give You Up", 2_400_000, 3_400_000)),
+            NoActions,
         )
     }
 }
@@ -279,10 +386,25 @@ private fun PreviewDownloading() {
 private fun PreviewFailed() {
     AudioSaverTheme {
         MainScreen(
-            input = "https://youtu.be/aaaaaaaaaaa",
-            parsed = YouTubeLinkParser.parse("https://youtu.be/aaaaaaaaaaa"),
-            download = DownloadState.Failed(VideoId.of("aaaaaaaaaaa"), FailureReason.UNAVAILABLE, "Got error ERROR: \"Video unavailable\""),
-            onInputChanged = {}, onDownload = {}, onCancel = {}, onRetry = {}, onPlay = {}, onShare = {}, onOpenFolder = {},
+            previewState(
+                "https://youtu.be/aaaaaaaaaaa",
+                DownloadState.Failed(VideoId.of("aaaaaaaaaaa"), FailureReason.UNAVAILABLE, "Got error ERROR: \"Video unavailable\""),
+            ),
+            NoActions,
         )
+    }
+}
+
+@Preview(showBackground = true, heightDp = 900)
+@Composable
+private fun PreviewMix() {
+    val link = "https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=RDdQw4w9WgXcQ"
+    val ref = (YouTubeLinkParser.parse(link) as LinkParseResult.Collection).ref
+    val items = listOf("dQw4w9WgXcQ", "yPYZpwSpKmA", "aaaaaaaaaaa").mapIndexed { i, id ->
+        CollectionItem(VideoId.of(id), "Song number ${i + 1}", "Artist $i", 200L + i * 30, available = i != 2)
+    }
+    val listing = CollectionListing.of(CollectionPage(ref, "Mix - Rick Astley", null, items, null, PageToken(Unit)))
+    AudioSaverTheme {
+        MainScreen(previewState(link, collection = CollectionUi.Loaded(listing.toggle(VideoId.of("yPYZpwSpKmA")))), NoActions)
     }
 }
