@@ -6,6 +6,7 @@ import android.net.Uri
 import android.os.Environment
 import android.provider.MediaStore
 import io.github.rudolfhk.audiosaver.core.pipeline.AudioSink
+import io.github.rudolfhk.audiosaver.core.pipeline.MediaKind
 import io.github.rudolfhk.audiosaver.core.pipeline.SavedAudio
 import io.github.rudolfhk.audiosaver.core.tag.TrackMetadata
 import kotlinx.coroutines.Dispatchers
@@ -17,7 +18,8 @@ import java.io.File
 import java.io.IOException
 
 /**
- * Saves into the shared Music collection (Music/AudioSaver, or Music/AudioSaver/<Album>) via MediaStore - no storage permission
+ * Saves into the shared Music collection (Music/AudioSaver, or Music/AudioSaver/<Album>) - or, for the
+ * optional MP4, the Video collection (Movies/AudioSaver) - via MediaStore - no storage permission
  * needed on API 29+. The entry is created with IS_PENDING=1 so other apps never see a half-written
  * file, and on any failure or cancel the entry is deleted again.
  */
@@ -31,11 +33,18 @@ class MediaStoreAudioSink(context: Context) : AudioSink {
         mimeType: String,
         metadata: TrackMetadata,
         subfolder: String?,
+        kind: MediaKind,
     ): SavedAudio =
         withContext(Dispatchers.IO) {
             // subfolder is already sanitised by the pipeline (album names can contain anything)
-            val relativePath = subfolder?.let { "$RELATIVE_PATH/$it" } ?: RELATIVE_PATH
-            val collection = MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+            val base = if (kind == MediaKind.VIDEO) VIDEO_RELATIVE_PATH else RELATIVE_PATH
+            val relativePath = subfolder?.let { "$base/$it" } ?: base
+            // Videos go to the Video collection (Movies/), so galleries list them; still no permission needed.
+            val collection = if (kind == MediaKind.VIDEO) {
+                MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+            } else {
+                MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+            }
             val pending = ContentValues().apply {
                 put(MediaStore.MediaColumns.DISPLAY_NAME, displayName)
                 put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
@@ -92,5 +101,6 @@ class MediaStoreAudioSink(context: Context) : AudioSink {
     companion object {
         const val FOLDER = "AudioSaver"
         val RELATIVE_PATH: String = "${Environment.DIRECTORY_MUSIC}/$FOLDER"
+        val VIDEO_RELATIVE_PATH: String = "${Environment.DIRECTORY_MOVIES}/$FOLDER"
     }
 }

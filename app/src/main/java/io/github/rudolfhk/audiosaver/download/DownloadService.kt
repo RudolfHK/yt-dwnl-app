@@ -10,8 +10,10 @@ import io.github.rudolfhk.audiosaver.audioSaverApp
 import io.github.rudolfhk.audiosaver.core.engine.FailureReason
 import io.github.rudolfhk.audiosaver.core.link.VideoId
 import io.github.rudolfhk.audiosaver.core.pipeline.BatchState
+import io.github.rudolfhk.audiosaver.core.pipeline.DownloadOptions
 import io.github.rudolfhk.audiosaver.core.pipeline.DownloadState
 import io.github.rudolfhk.audiosaver.core.pipeline.ItemStatus
+import io.github.rudolfhk.audiosaver.core.video.VideoQuality
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -60,9 +62,10 @@ class DownloadService : Service() {
                     return START_NOT_STICKY
                 }
                 timedOut = false
+                val options = optionsFrom(intent)
                 job = scope.launch {
                     try {
-                        controller.pipeline.run(videoId) { reported ->
+                        controller.pipeline.run(videoId, options = options) { reported ->
                             val state = if (reported is DownloadState.Cancelled && timedOut) {
                                 DownloadState.Failed(
                                     videoId,
@@ -153,11 +156,21 @@ class DownloadService : Service() {
             "Android stopped the background download (foreground-service time limit reached)."
         const val ACTION_CANCEL = "io.github.rudolfhk.audiosaver.CANCEL"
         private const val EXTRA_VIDEO_ID = "videoId"
+        private const val EXTRA_SAVE_AUDIO = "saveAudio"
+        private const val EXTRA_VIDEO_QUALITY = "videoQuality"
 
-        fun startIntent(context: Context, videoId: VideoId): Intent =
+        fun startIntent(context: Context, videoId: VideoId, options: DownloadOptions): Intent =
             Intent(context, DownloadService::class.java)
                 .setAction(ACTION_START)
                 .putExtra(EXTRA_VIDEO_ID, videoId.value)
+                .putExtra(EXTRA_SAVE_AUDIO, options.saveAudio)
+                .putExtra(EXTRA_VIDEO_QUALITY, options.video?.name)
+
+        private fun optionsFrom(intent: Intent): DownloadOptions {
+            val video = intent.getStringExtra(EXTRA_VIDEO_QUALITY)?.let(VideoQuality::fromName)
+            val saveAudio = intent.getBooleanExtra(EXTRA_SAVE_AUDIO, true) || video == null
+            return DownloadOptions(saveAudio = saveAudio, video = video)
+        }
 
         /** The batch itself is handed over through [DownloadController]; it can be too big for an Intent. */
         fun startBatchIntent(context: Context): Intent =

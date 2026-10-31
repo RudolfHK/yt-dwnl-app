@@ -60,18 +60,44 @@ data class ResolvedAudio(
     val uploadYear: Int?,
     val durationSeconds: Long?,
     val stream: AudioStreamSource,
+    /**
+     * Video-only streams that can be merged with [stream] into an MP4 (H.264 in MP4, directly
+     * downloadable). Empty when the engine found none; only used when the user asks for the video.
+     */
+    val videoStreams: List<VideoStreamSource> = emptyList(),
 )
 
+data class VideoStreamSource(
+    override val url: String,
+    val width: Int,
+    val height: Int,
+    val fps: Int,
+    /** e.g. "avc1.640028" */
+    val codec: String?,
+    val averageBitrate: Int?,
+    override val contentLength: Long?,
+    override val requestHeaders: Map<String, String> = emptyMap(),
+) : RemoteFile
+
+/** Something the downloader can fetch. */
+interface RemoteFile {
+    val url: String
+
+    /** Byte size if the extractor knows it up front; null means progress must be indeterminate. */
+    val contentLength: Long?
+
+    /** Extra headers the stream host expects (e.g. a matching User-Agent). */
+    val requestHeaders: Map<String, String>
+}
+
 data class AudioStreamSource(
-    val url: String,
+    override val url: String,
     val container: AudioContainer,
     val codec: String?,
     val averageBitrate: Int?,
-    /** Byte size if the extractor knows it up front; null means progress must be indeterminate. */
-    val contentLength: Long?,
-    /** Extra headers the stream host expects (e.g. a matching User-Agent). */
-    val requestHeaders: Map<String, String> = emptyMap(),
-)
+    override val contentLength: Long?,
+    override val requestHeaders: Map<String, String> = emptyMap(),
+) : RemoteFile
 
 enum class AudioContainer(val extension: String, val mimeType: String, val supportsTagging: Boolean) {
     /** AAC in MP4. Plays everywhere; tagged with iTunes-style atoms. */
@@ -89,6 +115,7 @@ enum class FailureReason(val userTitle: String, val retryable: Boolean) {
     PAID_OR_MEMBERS_ONLY("Paid or members-only content", retryable = false),
     LIVE_STREAM("Live streams can't be downloaded", retryable = false),
     NO_AUDIO_STREAM("No downloadable audio stream found", retryable = true),
+    NO_VIDEO_STREAM("No downloadable MP4 video stream found", retryable = true),
     BOT_CHECK("YouTube is asking to confirm you're not a bot", retryable = true),
     RATE_LIMITED("YouTube is rate-limiting this device", retryable = true),
     NETWORK("Network error", retryable = true),

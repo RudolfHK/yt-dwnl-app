@@ -16,7 +16,9 @@ import org.schabi.newpipe.extractor.stream.AudioTrackType
 import org.schabi.newpipe.extractor.stream.ContentAvailability
 import org.schabi.newpipe.extractor.stream.DeliveryMethod
 import org.schabi.newpipe.extractor.stream.StreamInfoItem
+import org.schabi.newpipe.extractor.services.youtube.ItagItem
 import org.schabi.newpipe.extractor.stream.StreamType
+import org.schabi.newpipe.extractor.stream.VideoStream
 import java.net.SocketTimeoutException
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -118,5 +120,38 @@ class NewPipeExtractionEngineTest {
         assertEquals("Whenever You Need Somebody", NewPipeExtractionEngine.cleanCollectionTitle("Album - Whenever You Need Somebody", CollectionKind.ALBUM))
         assertEquals("Mix - Rick Astley", NewPipeExtractionEngine.cleanCollectionTitle("Mix - Rick Astley", CollectionKind.MIX))
         assertEquals("Album - Best of", NewPipeExtractionEngine.cleanCollectionTitle("Album - Best of", CollectionKind.PLAYLIST))
+    }
+
+    private fun video(
+        format: MediaFormat,
+        delivery: DeliveryMethod = DeliveryMethod.PROGRESSIVE_HTTP,
+        resolution: String = "720p",
+        withItag: Boolean = true,
+    ) = VideoStream.Builder()
+        .setId("136")
+        .setContent("https://example.invalid/136", true)
+        .setMediaFormat(format)
+        .setDeliveryMethod(delivery)
+        .setResolution(resolution)
+        .setIsVideoOnly(true)
+        .apply { if (withItag) setItagItem(ItagItem.getItag(136).apply { contentLength = 83_132_227 }) }
+        .build()
+
+    @Test fun `only progressive mp4 video-only streams are offered to the core`() {
+        val mapped = NewPipeExtractionEngine.toVideoStream(video(MediaFormat.MPEG_4))!!
+        assertEquals("https://example.invalid/136", mapped.url)
+        assertEquals(720, mapped.height)
+        assertEquals(30, mapped.fps, "itag 136 is 720p30")
+        assertEquals(83_132_227L, mapped.contentLength)
+        assertNull(NewPipeExtractionEngine.toVideoStream(video(MediaFormat.WEBM)))
+        assertNull(NewPipeExtractionEngine.toVideoStream(video(MediaFormat.MPEG_4, DeliveryMethod.DASH)))
+    }
+
+    @Test fun `without itag data the size comes from the quality label`() {
+        val mapped = NewPipeExtractionEngine.toVideoStream(video(MediaFormat.MPEG_4, resolution = "1080p60", withItag = false))!!
+        assertEquals(1080, mapped.height)
+        assertEquals(60, mapped.fps)
+        assertNull(mapped.contentLength)
+        assertNull(NewPipeExtractionEngine.toVideoStream(video(MediaFormat.MPEG_4, resolution = "", withItag = false)), "no size at all")
     }
 }

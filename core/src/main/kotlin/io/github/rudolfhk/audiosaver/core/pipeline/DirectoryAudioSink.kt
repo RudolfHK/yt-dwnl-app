@@ -13,8 +13,10 @@ class DirectoryAudioSink(private val directory: File) : AudioSink {
         mimeType: String,
         metadata: TrackMetadata,
         subfolder: String?,
+        kind: MediaKind,
     ): SavedAudio = withContext(Dispatchers.IO) {
-        val dir = subfolder?.let { File(directory, it) } ?: directory
+        val base = if (kind == MediaKind.VIDEO) File(directory, "video") else directory
+        val dir = subfolder?.let { File(base, it) } ?: base
         dir.mkdirs()
         val target = uniqueTarget(dir, displayName)
         file.copyTo(target)

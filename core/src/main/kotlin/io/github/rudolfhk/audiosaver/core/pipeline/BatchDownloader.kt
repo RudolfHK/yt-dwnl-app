@@ -131,7 +131,8 @@ class BatchDownloader(
     }
 
     private fun finalStatus(state: DownloadState): ItemStatus = when (state) {
-        is DownloadState.Done -> ItemStatus.Saved(state.saved, state.taggingWarning)
+        is DownloadState.Done -> state.saved?.let { ItemStatus.Saved(it, state.taggingWarning) }
+            ?: ItemStatus.Failed(FailureReason.UNKNOWN, "Finished without saving the audio")
         is DownloadState.Failed -> ItemStatus.Failed(state.reason, state.detail)
         is DownloadState.Cancelled -> ItemStatus.Cancelled
         else -> ItemStatus.Failed(FailureReason.UNKNOWN, "Download ended without a result (last state: $state)")

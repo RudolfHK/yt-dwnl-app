@@ -11,6 +11,7 @@ import io.github.rudolfhk.audiosaver.core.engine.ExtractionEngine
 import io.github.rudolfhk.audiosaver.core.engine.FailureReason
 import io.github.rudolfhk.audiosaver.core.engine.PageToken
 import io.github.rudolfhk.audiosaver.core.engine.ResolvedAudio
+import io.github.rudolfhk.audiosaver.core.engine.VideoStreamSource
 import io.github.rudolfhk.audiosaver.core.link.CollectionKind
 import io.github.rudolfhk.audiosaver.core.link.CollectionRef
 import io.github.rudolfhk.audiosaver.core.link.LinkParseResult
@@ -48,6 +49,7 @@ import org.schabi.newpipe.extractor.stream.DeliveryMethod
 import org.schabi.newpipe.extractor.stream.StreamExtractor
 import org.schabi.newpipe.extractor.stream.StreamInfoItem
 import org.schabi.newpipe.extractor.stream.StreamType
+import org.schabi.newpipe.extractor.stream.VideoStream
 import java.io.IOException
 import java.time.ZoneOffset
 import java.util.Locale
@@ -150,6 +152,8 @@ class NewPipeExtractionEngine(
                 contentLength = chosen.itagItem?.contentLength?.takeIf { it > 0 },
                 requestHeaders = mapOf("User-Agent" to OkHttpNewPipeDownloader.USER_AGENT),
             ),
+            // Cheap to collect here (same player response); only downloaded if the user wants the video.
+            videoStreams = runCatching { extractor.videoOnlyStreams }.getOrDefault(emptyList()).mapNotNull(::toVideoStream),
         )
     }
 
@@ -211,6 +215,24 @@ class NewPipeExtractionEngine(
                 uploader = item.uploaderName?.takeIf { it.isNotBlank() }?.let(::cleanUploader),
                 durationSeconds = item.duration.takeIf { it > 0 },
                 available = name !in PLACEHOLDER_TITLES && !isLive && !restricted,
+            )
+        }
+
+        /** Video-only MP4 streams the core can merge; quality choice (H.264, height) happens in core. */
+        internal fun toVideoStream(stream: VideoStream): VideoStreamSource? {
+            if (!stream.isUrl || stream.deliveryMethod != DeliveryMethod.PROGRESSIVE_HTTP || stream.format != MediaFormat.MPEG_4) return null
+            // YouTube's itag data carries the size; the "720p60" label is the fallback.
+            val label = Regex("""(\d+)p(\d+)?""").find(stream.getResolution().orEmpty())
+            val height = stream.height.takeIf { it > 0 } ?: label?.groupValues?.get(1)?.toIntOrNull() ?: return null
+            return VideoStreamSource(
+                url = stream.content,
+                width = stream.width,
+                height = height,
+                fps = stream.fps.takeIf { it > 0 } ?: label?.groupValues?.get(2)?.toIntOrNull() ?: 30,
+                codec = stream.codec,
+                averageBitrate = stream.bitrate.takeIf { it > 0 },
+                contentLength = stream.itagItem?.contentLength?.takeIf { it > 0 },
+                requestHeaders = mapOf("User-Agent" to OkHttpNewPipeDownloader.USER_AGENT),
             )
         }
 

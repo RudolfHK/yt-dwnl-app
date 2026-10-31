@@ -1,8 +1,8 @@
 package io.github.rudolfhk.audiosaver.core.download
 
 import io.github.rudolfhk.audiosaver.core.engine.AudioSaveException
-import io.github.rudolfhk.audiosaver.core.engine.AudioStreamSource
 import io.github.rudolfhk.audiosaver.core.engine.FailureReason
+import io.github.rudolfhk.audiosaver.core.engine.RemoteFile
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
@@ -33,7 +33,7 @@ class HttpAudioDownloader(
     private val maxAttemptsPerChunk: Int = 3,
 ) {
 
-    suspend fun download(source: AudioStreamSource, target: File, listener: DownloadProgressListener): Long =
+    suspend fun download(source: RemoteFile, target: File, listener: DownloadProgressListener): Long =
         withContext(Dispatchers.IO) {
             target.outputStream().buffered(BUFFER_SIZE).use { out ->
                 val known = source.contentLength?.takeIf { it > 0 }
@@ -48,7 +48,7 @@ class HttpAudioDownloader(
         }
 
     private suspend fun downloadRanged(
-        source: AudioStreamSource,
+        source: RemoteFile,
         total: Long,
         out: OutputStream,
         listener: DownloadProgressListener,
@@ -88,7 +88,7 @@ class HttpAudioDownloader(
         return done
     }
 
-    private suspend fun downloadWhole(source: AudioStreamSource, out: OutputStream, listener: DownloadProgressListener): Long {
+    private suspend fun downloadWhole(source: RemoteFile, out: OutputStream, listener: DownloadProgressListener): Long {
         val request = requestBuilder(source).build()
         return try {
             execute(request) { code, body ->
@@ -133,7 +133,7 @@ class HttpAudioDownloader(
         return copied
     }
 
-    private fun requestBuilder(source: AudioStreamSource): Request.Builder =
+    private fun requestBuilder(source: RemoteFile): Request.Builder =
         Request.Builder().url(source.url).apply {
             source.requestHeaders.forEach { (name, value) -> header(name, value) }
         }

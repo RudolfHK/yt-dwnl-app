@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -25,6 +26,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -33,6 +35,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -46,6 +49,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringArrayResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -64,6 +68,8 @@ import io.github.rudolfhk.audiosaver.core.link.YouTubeLinkParser
 import io.github.rudolfhk.audiosaver.core.pipeline.BatchState
 import io.github.rudolfhk.audiosaver.core.pipeline.DownloadState
 import io.github.rudolfhk.audiosaver.core.pipeline.SavedAudio
+import io.github.rudolfhk.audiosaver.core.pipeline.VideoResult
+import io.github.rudolfhk.audiosaver.core.video.VideoQuality
 
 /** Everything the screen shows, gathered so the composable has one input instead of ten. */
 data class MainUiState(
@@ -74,6 +80,8 @@ data class MainUiState(
     val download: DownloadState,
     val collection: CollectionUi,
     val batch: BatchState?,
+    val saveVideo: Boolean = false,
+    val videoQuality: VideoQuality = VideoQuality.BEST,
 ) {
     val busy: Boolean get() = download.isActive || batch?.isActive == true
 }
@@ -93,6 +101,9 @@ interface MainActions {
     fun onReloadCollection()
     fun onRetryFailed()
     fun onDismissBatch()
+    fun onSaveVideo(value: Boolean)
+    fun onVideoQuality(quality: VideoQuality)
+    fun onRetryVideo(videoId: VideoId)
 }
 
 @Composable
@@ -180,12 +191,21 @@ fun MainScreen(state: MainUiState, actions: MainActions) {
                 collectionSection(state, actions)
             } else {
                 item {
+                    VideoOption(
+                        enabled = !state.busy,
+                        checked = state.saveVideo,
+                        quality = state.videoQuality,
+                        onChecked = actions::onSaveVideo,
+                        onQuality = actions::onVideoQuality,
+                    )
+                }
+                item {
                     Button(onClick = actions::onDownload, enabled = canDownloadSingle, modifier = Modifier.fillMaxWidth()) {
-                        Text(stringResource(R.string.download))
+                        Text(stringResource(if (state.saveVideo) R.string.download_with_video else R.string.download))
                     }
                 }
                 item {
-                    StatusCard(state.download, actions::onCancel, actions::onRetry, actions::onPlay, actions::onShare, actions::onOpenFolder)
+                    StatusCard(state.download, actions)
                 }
             }
 
@@ -229,14 +249,9 @@ private fun ValidationText(input: String, parsed: LinkParseResult) {
 
 @OptIn(ExperimentalLayoutApi::class) // FlowRow; a no-op on Compose versions where it is stable
 @Composable
-private fun StatusCard(
-    state: DownloadState,
-    onCancel: () -> Unit,
-    onRetry: (VideoId) -> Unit,
-    onPlay: (SavedAudio) -> Unit,
-    onShare: (SavedAudio) -> Unit,
-    onOpenFolder: (SavedAudio) -> Unit,
-) {
+private fun StatusCard(state: DownloadState, actions: MainActions) {
+    val onCancel = actions::onCancel
+    val onRetry = actions::onRetry
     if (state is DownloadState.Idle) return
     val isError = state is DownloadState.Failed
     Card(
@@ -256,7 +271,10 @@ private fun StatusCard(
                 }
 
                 is DownloadState.Downloading -> {
-                    PhaseHeader(stringResource(R.string.phase_downloading), subtitle = state.title)
+                    PhaseHeader(
+                        stringResource(if (state.withVideo) R.string.phase_downloading_video else R.string.phase_downloading),
+                        subtitle = state.title,
+                    )
                     val fraction = state.fraction
                     if (fraction != null) {
                         // Real percentage only when the size is actually known...
@@ -286,19 +304,48 @@ private fun StatusCard(
                     LinearProgressIndicator(Modifier.fillMaxWidth())
                 }
 
+                is DownloadState.Merging -> {
+                    PhaseHeader(stringResource(R.string.phase_merging), subtitle = state.title)
+                    LinearProgressIndicator(Modifier.fillMaxWidth())
+                    CancelRow(onCancel)
+                }
+
                 is DownloadState.Done -> {
-                    PhaseHeader("✓ " + stringResource(R.string.saved_title), subtitle = state.saved.displayName)
-                    Text(
-                        stringResource(R.string.saved_location, state.saved.location, formatBytes(state.saved.sizeBytes)),
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                    state.taggingWarning?.let {
-                        Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
+                    state.saved?.let { saved ->
+                        PhaseHeader("✓ " + stringResource(R.string.saved_title), subtitle = saved.displayName)
+                        Text(
+                            stringResource(R.string.saved_location, saved.location, formatBytes(saved.sizeBytes)),
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        state.taggingWarning?.let {
+                            Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
+                        }
+                        FileButtons(saved, actions)
                     }
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(onClick = { onPlay(state.saved) }) { Text(stringResource(R.string.play)) }
-                        OutlinedButton(onClick = { onShare(state.saved) }) { Text(stringResource(R.string.share)) }
-                        OutlinedButton(onClick = { onOpenFolder(state.saved) }) { Text(stringResource(R.string.open_folder)) }
+                    when (val video = state.video) {
+                        is VideoResult.Saved -> {
+                            if (state.saved != null) HorizontalDivider()
+                            PhaseHeader("✓ " + stringResource(R.string.video_saved_title, video.height), subtitle = video.saved.displayName)
+                            Text(
+                                stringResource(R.string.saved_location, video.saved.location, formatBytes(video.saved.sizeBytes)),
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                            video.warning?.let {
+                                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
+                            }
+                            FileButtons(video.saved, actions)
+                        }
+                        is VideoResult.Failed -> {
+                            if (state.saved != null) HorizontalDivider()
+                            Text(
+                                stringResource(R.string.video_failed_title, video.reason.userTitle),
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                            SelectionContainer { Text(video.detail, style = MaterialTheme.typography.bodySmall) }
+                            OutlinedButton(onClick = { actions.onRetryVideo(state.videoId) }) { Text(stringResource(R.string.retry_video)) }
+                        }
+                        null -> Unit
                     }
                 }
 
@@ -331,6 +378,54 @@ private fun StatusCard(
                 }
 
                 DownloadState.Idle -> Unit
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun FileButtons(saved: SavedAudio, actions: MainActions) {
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedButton(onClick = { actions.onPlay(saved) }) { Text(stringResource(R.string.play)) }
+        OutlinedButton(onClick = { actions.onShare(saved) }) { Text(stringResource(R.string.share)) }
+        OutlinedButton(onClick = { actions.onOpenFolder(saved) }) { Text(stringResource(R.string.open_folder)) }
+    }
+}
+
+/** "Also save video (MP4)" with the quality ceiling. Only shown for single videos. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun VideoOption(
+    enabled: Boolean,
+    checked: Boolean,
+    quality: VideoQuality,
+    onChecked: (Boolean) -> Unit,
+    onQuality: (VideoQuality) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .toggleable(value = checked, enabled = enabled, role = Role.Switch, onValueChange = onChecked),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(stringResource(R.string.save_video), style = MaterialTheme.typography.bodyLarge)
+                Text(stringResource(R.string.save_video_hint), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Switch(checked = checked, onCheckedChange = null, enabled = enabled)
+        }
+        if (checked) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                VideoQuality.entries.forEach { option ->
+                    FilterChip(
+                        selected = option == quality,
+                        onClick = { onQuality(option) },
+                        enabled = enabled,
+                        label = { Text(option.label) },
+                    )
+                }
             }
         }
     }
@@ -420,6 +515,9 @@ private object NoActions : MainActions {
     override fun onReloadCollection() = Unit
     override fun onRetryFailed() = Unit
     override fun onDismissBatch() = Unit
+    override fun onSaveVideo(value: Boolean) = Unit
+    override fun onVideoQuality(quality: VideoQuality) = Unit
+    override fun onRetryVideo(videoId: VideoId) = Unit
 }
 
 private fun previewState(link: String, download: DownloadState = DownloadState.Idle, collection: CollectionUi = CollectionUi.Hidden): MainUiState {

@@ -26,6 +26,17 @@
     <string name="no_player">No app installed that can play %1$s files.</string>
     <string name="no_file_manager">No file manager could open the folder. The file is in %1$s.</string>
 
+    <string name="save_video">Also save video (MP4)</string>
+    <string name="save_video_hint">Merged with the audio on the phone, saved to Movies/AudioSaver. Videos can be large.</string>
+    <string name="download_with_video">Download audio + video</string>
+    <string name="phase_downloading_video">Downloading audio and video</string>
+    <string name="phase_merging">Merging video and audio…</string>
+    <string name="with_video_prefix">Audio + video · %1$s</string>
+    <string name="video_saved_title">Video saved (%1$dp)</string>
+    <string name="video_failed_title">Audio saved, but the video failed: %1$s</string>
+    <string name="retry_video">Retry video</string>
+    <string name="notification_video_done">%1$dp video in %2$s</string>
+    <string name="notification_video_failed">video failed: %1$s</string>
     <string name="link_hint">A video, mix, album or playlist link - or share one from the YouTube app</string>
     <string name="valid_collection">%1$s link · pick the songs below</string>
     <string name="whole_collection">Whole %1$s</string>
@@ -62,6 +73,7 @@
         <item>Downloads that stream straight from YouTube\'s servers in resumable chunks, in a background service so it keeps going when you leave the app.</item>
         <item>Writes title, artist, year and the source link into the file as tags. The audio itself is never re-encoded, so it stays exactly as YouTube serves it.</item>
         <item>Saves it to Music/AudioSaver (album songs to Music/AudioSaver/Album name, with album and track number tags) through Android\'s MediaStore, so no storage permission is needed, then checks that the saved file is complete.</item>
+        <item>Optional, for single videos: with "Also save video (MP4)" on, it also downloads YouTube\'s H.264 video stream (up to the quality you pick, at most 1080p) and merges it with the same audio into an MP4 on the phone - again without re-encoding. The audio is saved first, so a failed video never costs you the song.</item>
     </string-array>
     <string name="info_errors_title">Why some downloads fail</string>
     <string name="info_errors_intro">YouTube has no official download API. The app reads YouTube the way a browser does, and YouTube changes its site often and deliberately makes this harder. When something goes wrong, the error card says exactly what happened:</string>

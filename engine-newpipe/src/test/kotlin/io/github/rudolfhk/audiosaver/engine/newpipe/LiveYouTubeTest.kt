@@ -8,7 +8,10 @@ import io.github.rudolfhk.audiosaver.core.link.VideoId
 import io.github.rudolfhk.audiosaver.core.link.YouTubeLinkParser
 import io.github.rudolfhk.audiosaver.core.pipeline.AudioDownloadPipeline
 import io.github.rudolfhk.audiosaver.core.pipeline.DirectoryAudioSink
+import io.github.rudolfhk.audiosaver.core.pipeline.DownloadOptions
 import io.github.rudolfhk.audiosaver.core.pipeline.DownloadState
+import io.github.rudolfhk.audiosaver.core.pipeline.VideoResult
+import io.github.rudolfhk.audiosaver.core.video.VideoQuality
 import kotlinx.coroutines.runBlocking
 import okhttp3.OkHttpClient
 import org.junit.Assume.assumeTrue
@@ -54,7 +57,7 @@ class LiveYouTubeTest {
             .run(creativeCommonsVideo) { states += it; if (it !is DownloadState.Downloading) println(it) }
         val done = assertIs<DownloadState.Done>(states.last(), "ended in ${states.last()}")
         assertEquals(null, done.taggingWarning)
-        assertTrue(File(out, done.saved.displayName).length() > 100_000)
+        assertTrue(File(out, done.saved!!.displayName).length() > 100_000)
     }
 
     @Test fun `unavailable video id gives a specific failure`() = runBlocking {
@@ -76,5 +79,17 @@ class LiveYouTubeTest {
         assertEquals(creativeCommonsVideo, first.items.first().videoId, "a mix starts with its seed")
         val second = engine.listCollection(ref, assertNotNull(first.next))
         assertTrue(second.items.isNotEmpty())
+    }
+
+    @Test fun `saves the video as a merged mp4 next to the audio`() = runBlocking {
+        val out = File(tmp.root, "Music")
+        val states = mutableListOf<DownloadState>()
+        AudioDownloadPipeline(engine, HttpAudioDownloader(client), DirectoryAudioSink(out), File(tmp.root, "work"))
+            .run(creativeCommonsVideo, options = DownloadOptions(video = VideoQuality.P360)) { states += it; if (it !is DownloadState.Downloading) println(it) }
+        val done = assertIs<DownloadState.Done>(states.last(), "ended in ${states.last()}")
+        val video = assertIs<VideoResult.Saved>(done.video, "video: ${done.video}")
+        println("Video: ${video.width}x${video.height}@${video.fps}, ${video.saved.sizeBytes} bytes")
+        assertTrue(video.height in 240..480)
+        assertTrue(File(File(out, "video"), video.saved.displayName).length() > 1_000_000)
     }
 }

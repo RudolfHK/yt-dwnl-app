@@ -85,8 +85,8 @@ class AudioDownloadPipelineTest {
 
         val done = assertIs<DownloadState.Done>(states.last())
         assertNull(done.taggingWarning)
-        assertEquals("Rick Astley - Never Gonna Give You Up.m4a", done.saved.displayName)
-        val saved = File(File(tmp.root, "Music"), done.saved.displayName)
+        assertEquals("Rick Astley - Never Gonna Give You Up.m4a", done.saved!!.displayName)
+        val saved = File(File(tmp.root, "Music"), done.saved!!.displayName)
         assertTrue(saved.length() > m4a.size, "tags should have grown the file")
         val text = saved.readBytes().toString(Charsets.ISO_8859_1)
         assertTrue(text.contains("Never Gonna Give You Up") && text.contains("Rick Astley") && text.contains("2009"))
@@ -121,14 +121,14 @@ class AudioDownloadPipelineTest {
         server.enqueue(MockResponse.Builder().body("webm bytes").build())
         run(pipeline(engine(container = AudioContainer.WEBM_OPUS)))
         val done = assertIs<DownloadState.Done>(states.last())
-        assertTrue(done.saved.displayName.endsWith(".webm"))
+        assertTrue(done.saved!!.displayName.endsWith(".webm"))
         assertNotNull(done.taggingWarning)
     }
 
     @Test fun `a sink that reports the wrong size is not treated as success`() {
         server.enqueue(MockResponse.Builder().body(Buffer().write(m4a)).build())
         val lyingSink = object : AudioSink {
-            override suspend fun save(file: File, displayName: String, mimeType: String, metadata: TrackMetadata, subfolder: String?) =
+            override suspend fun save(file: File, displayName: String, mimeType: String, metadata: TrackMetadata, subfolder: String?, kind: MediaKind) =
                 SavedAudio(displayName, "nowhere", "content://x/1", mimeType, sizeBytes = 0)
         }
         run(pipeline(engine(), lyingSink))
@@ -139,7 +139,7 @@ class AudioDownloadPipelineTest {
     @Test fun `storage exceptions become STORAGE failures`() {
         server.enqueue(MockResponse.Builder().body(Buffer().write(m4a)).build())
         val fullDisk = object : AudioSink {
-            override suspend fun save(file: File, displayName: String, mimeType: String, metadata: TrackMetadata, subfolder: String?): SavedAudio =
+            override suspend fun save(file: File, displayName: String, mimeType: String, metadata: TrackMetadata, subfolder: String?, kind: MediaKind): SavedAudio =
                 throw java.io.IOException("No space left on device")
         }
         run(pipeline(engine(), fullDisk))

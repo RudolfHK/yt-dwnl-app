@@ -11,6 +11,7 @@ import io.github.rudolfhk.audiosaver.core.pipeline.BatchDownloader
 import io.github.rudolfhk.audiosaver.core.pipeline.BatchItemState
 import io.github.rudolfhk.audiosaver.core.pipeline.BatchRequest
 import io.github.rudolfhk.audiosaver.core.pipeline.BatchState
+import io.github.rudolfhk.audiosaver.core.pipeline.DownloadOptions
 import io.github.rudolfhk.audiosaver.core.pipeline.DownloadState
 import io.github.rudolfhk.audiosaver.core.pipeline.ItemStatus
 import kotlinx.coroutines.Job
@@ -41,14 +42,14 @@ class DownloadController(
     val isBusy: Boolean get() = _state.value.isActive || _batch.value?.isActive == true
 
     /** Returns false if something is already downloading. */
-    fun start(context: Context, videoId: VideoId): Boolean {
+    fun start(context: Context, videoId: VideoId, options: DownloadOptions = DownloadOptions.AUDIO_ONLY): Boolean {
         synchronized(this) {
             if (isBusy) return false
             _batch.value = null
             // Flip state before the service spins up so the UI reacts on the same frame.
             _state.value = DownloadState.Resolving(videoId)
         }
-        return startService(context, DownloadService.startIntent(context, videoId)) { message ->
+        return startService(context, DownloadService.startIntent(context, videoId, options)) { message ->
             publish(DownloadState.Failed(videoId, FailureReason.UNKNOWN, message))
         }
     }

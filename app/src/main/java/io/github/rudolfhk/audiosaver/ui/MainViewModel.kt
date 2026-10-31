@@ -12,7 +12,9 @@ import io.github.rudolfhk.audiosaver.core.link.VideoId
 import io.github.rudolfhk.audiosaver.core.link.YouTubeLinkParser
 import io.github.rudolfhk.audiosaver.core.pipeline.BatchRequest
 import io.github.rudolfhk.audiosaver.core.pipeline.BatchState
+import io.github.rudolfhk.audiosaver.core.pipeline.DownloadOptions
 import io.github.rudolfhk.audiosaver.core.pipeline.DownloadState
+import io.github.rudolfhk.audiosaver.core.video.VideoQuality
 import io.github.rudolfhk.audiosaver.download.DownloadController
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -42,7 +44,30 @@ sealed interface CollectionUi {
     data class Failed(val ref: CollectionRef, val reason: FailureReason, val detail: String) : CollectionUi
 }
 
-class MainViewModel(private val controller: DownloadController) : ViewModel() {
+class MainViewModel(
+    private val controller: DownloadController,
+    private val videoPrefs: VideoPreferences,
+) : ViewModel() {
+
+    /** Optional MP4 next to the audio; single videos only (never offered for mixes/albums). */
+    private val _saveVideo = MutableStateFlow(videoPrefs.enabled)
+    val saveVideo: StateFlow<Boolean> = _saveVideo.asStateFlow()
+
+    private val _videoQuality = MutableStateFlow(videoPrefs.quality)
+    val videoQuality: StateFlow<VideoQuality> = _videoQuality.asStateFlow()
+
+    fun setSaveVideo(value: Boolean) {
+        _saveVideo.value = value
+        videoPrefs.enabled = value
+    }
+
+    fun setVideoQuality(value: VideoQuality) {
+        _videoQuality.value = value
+        videoPrefs.quality = value
+    }
+
+    private fun singleOptions() =
+        if (_saveVideo.value) DownloadOptions(video = _videoQuality.value) else DownloadOptions.AUDIO_ONLY
 
     private val _input = MutableStateFlow("")
     val input: StateFlow<String> = _input.asStateFlow()
@@ -174,7 +199,7 @@ class MainViewModel(private val controller: DownloadController) : ViewModel() {
 
     fun startDownload(context: Context) {
         when (val t = target.value) {
-            is Target.Single -> controller.start(context, t.videoId)
+            is Target.Single -> controller.start(context, t.videoId, singleOptions())
             is Target.Collection -> {
                 val listing = (_collection.value as? CollectionUi.Loaded)?.listing ?: return
                 controller.startBatch(context, listing.toBatchRequest())
@@ -185,7 +210,13 @@ class MainViewModel(private val controller: DownloadController) : ViewModel() {
 
     fun retry(context: Context, videoId: VideoId) {
         controller.dismissResult()
-        controller.start(context, videoId)
+        controller.start(context, videoId, singleOptions())
+    }
+
+    /** The audio was saved but the video wasn't: try only the video again, without a second audio copy. */
+    fun retryVideo(context: Context, videoId: VideoId) {
+        controller.dismissResult()
+        controller.start(context, videoId, DownloadOptions(saveAudio = false, video = _videoQuality.value))
     }
 
     fun retryFailed(context: Context) {

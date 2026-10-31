@@ -17,6 +17,7 @@ import io.github.rudolfhk.audiosaver.R
 import io.github.rudolfhk.audiosaver.core.pipeline.BatchState
 import io.github.rudolfhk.audiosaver.core.pipeline.DownloadState
 import io.github.rudolfhk.audiosaver.core.pipeline.ItemStatus
+import io.github.rudolfhk.audiosaver.core.pipeline.VideoResult
 import io.github.rudolfhk.audiosaver.ui.formatBytes
 
 internal class DownloadNotifications(private val context: Context) {
@@ -42,23 +43,25 @@ internal class DownloadNotifications(private val context: Context) {
             is DownloadState.Downloading -> {
                 builder.setContentTitle(state.title)
                 val fraction = state.fraction
-                if (fraction != null && state.totalBytes != null) {
+                val text = if (fraction != null && state.totalBytes != null) {
                     builder.setProgress(1000, (fraction * 1000).toInt(), false)
-                        .setContentText(
-                            context.getString(
-                                R.string.progress_known,
-                                (fraction * 100).toInt(),
-                                formatBytes(state.bytesDownloaded),
-                                formatBytes(state.totalBytes!!),
-                            ),
-                        )
+                    context.getString(
+                        R.string.progress_known,
+                        (fraction * 100).toInt(),
+                        formatBytes(state.bytesDownloaded),
+                        formatBytes(state.totalBytes!!),
+                    )
                 } else {
                     builder.setProgress(0, 0, true)
-                        .setContentText(context.getString(R.string.progress_unknown, formatBytes(state.bytesDownloaded)))
+                    context.getString(R.string.progress_unknown, formatBytes(state.bytesDownloaded))
                 }
+                builder.setContentText(if (state.withVideo) context.getString(R.string.with_video_prefix, text) else text)
             }
             is DownloadState.Saving -> builder.setContentTitle(state.title)
                 .setContentText(context.getString(R.string.phase_saving))
+                .setProgress(0, 0, true)
+            is DownloadState.Merging -> builder.setContentTitle(state.title)
+                .setContentText(context.getString(R.string.phase_merging))
                 .setProgress(0, 0, true)
             else -> builder.setContentTitle(context.getString(R.string.phase_resolving)).setProgress(0, 0, true)
         }
@@ -69,11 +72,23 @@ internal class DownloadNotifications(private val context: Context) {
 
     fun result(state: DownloadState) {
         val notification = when (state) {
-            is DownloadState.Done -> base()
-                .setContentTitle(state.saved.displayName)
-                .setContentText(context.getString(R.string.notification_done, state.saved.location))
-                .setAutoCancel(true)
-                .build()
+            is DownloadState.Done -> {
+                val video = state.video
+                val lines = listOfNotNull(
+                    state.saved?.let { context.getString(R.string.notification_done, it.location) },
+                    when (video) {
+                        is VideoResult.Saved -> context.getString(R.string.notification_video_done, video.height, video.saved.location)
+                        is VideoResult.Failed -> context.getString(R.string.notification_video_failed, video.reason.userTitle)
+                        null -> null
+                    },
+                )
+                base()
+                    .setContentTitle(state.saved?.displayName ?: (video as? VideoResult.Saved)?.saved?.displayName ?: context.getString(R.string.notification_failed))
+                    .setContentText(lines.joinToString(" · "))
+                    .setStyle(NotificationCompat.BigTextStyle().bigText(lines.joinToString("\n")))
+                    .setAutoCancel(true)
+                    .build()
+            }
             is DownloadState.Failed -> base()
                 .setContentTitle(context.getString(R.string.notification_failed))
                 .setContentText("${state.reason.userTitle}: ${state.detail}")

@@ -19,15 +19,17 @@ import io.github.rudolfhk.audiosaver.ui.AudioSaverTheme
 import io.github.rudolfhk.audiosaver.ui.FileActions
 import io.github.rudolfhk.audiosaver.core.link.VideoId
 import io.github.rudolfhk.audiosaver.core.pipeline.SavedAudio
+import io.github.rudolfhk.audiosaver.core.video.VideoQuality
 import io.github.rudolfhk.audiosaver.ui.MainActions
 import io.github.rudolfhk.audiosaver.ui.MainScreen
 import io.github.rudolfhk.audiosaver.ui.MainUiState
 import io.github.rudolfhk.audiosaver.ui.MainViewModel
+import io.github.rudolfhk.audiosaver.ui.VideoPreferences
 
 class MainActivity : ComponentActivity() {
 
     private val viewModel: MainViewModel by viewModels {
-        viewModelFactory { initializer { MainViewModel(audioSaverApp.controller) } }
+        viewModelFactory { initializer { MainViewModel(audioSaverApp.controller, VideoPreferences(this@MainActivity)) } }
     }
     private var askedForNotifications = false
 
@@ -46,6 +48,9 @@ class MainActivity : ComponentActivity() {
         override fun onReloadCollection() = viewModel.reloadCollection()
         override fun onRetryFailed() = viewModel.retryFailed(this@MainActivity)
         override fun onDismissBatch() = viewModel.dismissBatch()
+        override fun onSaveVideo(value: Boolean) = viewModel.setSaveVideo(value)
+        override fun onVideoQuality(quality: VideoQuality) = viewModel.setVideoQuality(quality)
+        override fun onRetryVideo(videoId: VideoId) = viewModel.retryVideo(this@MainActivity, videoId)
     }
 
     /** Asked once, on the first download. Declining only hides the notification. */
@@ -64,9 +69,14 @@ class MainActivity : ComponentActivity() {
             val download by viewModel.download.collectAsStateWithLifecycle()
             val collection by viewModel.collection.collectAsStateWithLifecycle()
             val batch by viewModel.batch.collectAsStateWithLifecycle()
+            val saveVideo by viewModel.saveVideo.collectAsStateWithLifecycle()
+            val videoQuality by viewModel.videoQuality.collectAsStateWithLifecycle()
 
             AudioSaverTheme {
-                MainScreen(MainUiState(input, parsed, target, justThisSong, download, collection, batch), actions)
+                MainScreen(
+                    MainUiState(input, parsed, target, justThisSong, download, collection, batch, saveVideo, videoQuality),
+                    actions,
+                )
             }
         }
         // Only on a fresh launch: after rotation the ViewModel already holds the text.
