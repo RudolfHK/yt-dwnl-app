@@ -2,6 +2,7 @@
 
 A small, single-purpose Android app: **paste or share a YouTube link → an audio file appears in your phone's Music folder.**
 Paste a **mix, album or playlist** link instead and it lists the songs so you can tick which ones to download.
+For a single video you can optionally **also save the video as an MP4**.
 No library, no accounts, no in-app playback, no browsing.
 
 > **Personal use only.** Use this app only for content you have the right to download: your own uploads, content under a
@@ -33,7 +34,9 @@ core/            Pure Kotlin/JVM, no Android. Unit-tested on the JVM.
   collection/    CollectionListing: the pick-your-songs list (selection, load more, de-dup, 200-song cap)
   engine/        ExtractionEngine interface + models + FailureReason   <-- the seam
   download/      HttpAudioDownloader: ranged, resumable, cancellable HTTP download with progress
-  tag/           Mp4Tagger: writes iTunes-style tags into M4A in one streaming pass (no FFmpeg)
+  tag/           Mp4Tagger: writes iTunes-style tags into M4A/MP4 in one streaming pass (no FFmpeg)
+  video/         DashMp4Muxer: merges YouTube's video-only + audio-only streams into one MP4 (no FFmpeg);
+                 VideoQuality: picks the H.264 stream for the chosen quality
   pipeline/      AudioDownloadPipeline: resolve -> download -> tag -> save -> verify, emits DownloadState
                  BatchDownloader: runs the selected songs through that pipeline one by one
 engine-newpipe/  The ONLY module that imports NewPipeExtractor (pure JVM)
@@ -154,6 +157,35 @@ YouTube offers audio-only streams as AAC-LC ~128 kbps in MP4 (itag 140), HE-AAC 
   cookies" (NewPipeExtractor's `setConsentAccepted(true)`); with the default "reject all" value mix extraction fails
   there. The app sends that value. It keeps no cookie jar, so nothing is stored or tracked.
 
+## Optional MP4 video (single videos only)
+
+Switch **Also save video (MP4)** on (remembered) and pick a ceiling: *Best (up to 1080p)*, *720p*, *480p* or *360p*.
+The audio file is saved exactly as before; the MP4 is an extra file in `Movies/AudioSaver/Artist - Title.mp4`
+(MediaStore Video collection, so galleries list it; still no storage permission). Not offered for mixes, albums or
+playlists.
+
+**Why it needs merging.** YouTube no longer serves any single file with picture *and* sound: in the extractor's
+recorded responses (Aug–Oct 2026) the client NewPipe uses returns only video-only and audio-only DASH streams —
+H.264 up to 1080p, plus VP9 and AV1. So the app downloads the **H.264** video-only stream at or below the chosen
+height (higher fps, then bitrate, break ties) and merges it with the AAC audio it already downloaded. H.264 because
+it plays on every phone, gallery and TV; above 1080p YouTube only offers VP9/AV1, which many devices can't play in
+MP4, so that's out of scope.
+
+**How, without FFmpeg.** Both streams are fragmented MP4, so `DashMp4Muxer` merges them at the box level, the same
+way `Mp4Tagger` works: one `moov` with both tracks (ids renumbered, real durations written into
+`mvhd`/`tkhd`/`mdhd`/`mehd` so galleries show the length), the `moof`/`mdat` fragments of both tracks interleaved by
+decode time (what a player reading front to back needs), absolute fragment offsets moved, per-track indexes
+(`sidx`/`mfra`) dropped. Nothing is decoded or re-encoded, so quality is exactly YouTube's and it's fast. The merged
+file is then tagged (title, artist, year, source URL) like the audio.
+
+**Flow and failures.** Resolving → Downloading (one bar over audio + video when both sizes are known) → Saving the
+audio → Merging video and audio → saving the video. **The audio is saved first**, so a video problem never costs
+the song: the result shows "Audio saved, but the video failed: <specific reason>" with **Retry video**, which
+downloads only what the video needs and doesn't save a second audio copy. Free space is checked *before* the video
+download (≈ 2 × video + 2 × audio while working); not enough is reported up front. Other specific video failures:
+no H.264 stream (*No downloadable MP4 video stream found*), audio only available as Opus/WebM (can't go in an MP4),
+HTTP errors, merge errors. Cancel stops everything and leaves no partial video.
+
 ## Test plan
 
 ### Automated (JVM, run anywhere: `./gradlew :core:test :engine-newpipe:test`)
@@ -163,11 +195,14 @@ YouTube offers audio-only streams as AAC-LC ~128 kbps in MP4 (itag 140), HE-AAC 
 | `YouTubeLinkParserTest` (13) | watch / youtu.be share links (`?si=`) / m. / music. / shorts / live / embed / nocookie / bare IDs / links inside shared text; mix (incl. seed derivation, genre mixes), music mix, album and playlist links; private (`LL`/`WL`) and malformed lists; empty, garbage, other hosts, look-alike hosts, wrong-length IDs, channel links, with reasons |
 | `Mp4TaggerTest` (9, needs ffmpeg on PATH) | YouTube-style DASH fMP4, fragmented+`mfra`, faststart (`stco`), moov-at-end; album / album-artist / track `3/10` tags; no album fields for mixes; re-tagging replaces tags; junk and truncated input rejected. Verified with ffprobe + bit-identical decoded-audio MD5 |
 | `CollectionListingTest` (7) | default selection, unavailable rows, toggle / all / none, load-more de-dup keeping the user's choices, looping mix ends, 200-song cap, album vs mix batch contexts |
+| `DashMp4MuxerTest` (7, needs ffmpeg) | YouTube-style DASH (relative offsets, `dash` brand, sidx) and absolute-offset fragments with other fps/timescales/sample rates; audio longer than video; verified with ffprobe/ffmpeg: h264+aac, duration, no decode errors, **decoded video and audio bit-identical to the inputs**; structural checks that fragments are interleaved and durations are in `mvhd`/`mehd`/`tkhd` (ffmpeg would hide both); merged file taggable; swapped, non-fragmented, junk and truncated inputs rejected. Every check was confirmed to fail when the code it guards is broken. |
+| `VideoQualityTest` (5) | tallest H.264 within the ceiling (never VP9/AV1), 60 fps preferred, smallest if all are taller, no H.264 → none |
+| `VideoPipelineTest` (8, needs ffmpeg) | audio + merged, tagged, playable MP4; one progress bar over both, phase order; video HTTP failure keeps the audio; retry-video doesn't save audio again; no H.264 / not enough space / Opus-only audio reported without downloading the video; cancel mid-video leaves no temp or partial files |
 | `BatchDownloaderTest` (5) | order, carries on after a failure, stops on rate-limiting without further requests, cancel keeps finished songs and cancels the rest, album track numbers/folder/tags, retry-failed keeps album context |
 | `HttpAudioDownloaderTest` (10) | chunked Range download, determinate vs indeterminate progress, server ignoring Range, resume after mid-chunk disconnect, 403 / 429, persistent network failure, empty responses, prompt cancel of a stalled read |
 | `AudioDownloadPipelineTest` (10) | phase order, tagged output, temp-file cleanup, extractor error pass-through (no download attempted), untaggable → saved with warning, WebM path, lying/failing storage → STORAGE error, cancel → Cancelled, file-name sanitising |
-| `NewPipeExtractionEngineTest` (8) | NewPipe exception → `FailureReason` mapping keeps the original message; stream choice (original track, M4A over Opus, bitrate, progressive only); "- Topic" cleanup; playlist entries → items (incl. `&list=` URLs), non-downloadable entries, album title prefix |
-| `LiveYouTubeTest` (4, opt-in: `LIVE_YOUTUBE=1`) | Real YouTube: resolves a Creative-Commons video, full pipeline to a tagged file, unavailable ID → `UNAVAILABLE`, lists that video's mix and loads a second page. **Run this first when "downloads stopped working"** — it tells you whether YouTube/the extractor broke. |
+| `NewPipeExtractionEngineTest` (10) | NewPipe exception → `FailureReason` mapping keeps the original message; stream choice (original track, M4A over Opus, bitrate, progressive only); "- Topic" cleanup; playlist entries → items (incl. `&list=` URLs), non-downloadable entries, album title prefix; only progressive MP4 video-only streams offered, size from itag data or the "1080p60" label |
+| `LiveYouTubeTest` (5, opt-in: `LIVE_YOUTUBE=1`) | Real YouTube: resolves a Creative-Commons video, full pipeline to a tagged file, unavailable ID → `UNAVAILABLE`, lists that video's mix and loads a second page, saves a merged ≤480p MP4 next to the audio. **Run this first when "downloads stopped working"** — it tells you whether YouTube/the extractor broke. |
 
 ### Manual, on a device or emulator
 
@@ -204,7 +239,13 @@ Use content you're allowed to download, e.g. Blender's *Big Buck Bunny* (CC BY):
    show "cancelled", no partial file remains. Put the phone in airplane mode during a batch: affected songs fail with
    "Network error"; turn it back on and *Retry failed* downloads just those.
 9. **Private list.** `https://www.youtube.com/playlist?list=WL` → inline "Watch later … can't be read without signing in".
-10. **Robustness extras.** Lock the screen / switch apps mid-download (it continues); rotate during a download (progress
+10. **Video.** Turn on *Also save video (MP4)*, pick *720p*, paste `https://youtu.be/aqz-KE-bpKQ`, tap *Download audio +
+    video*: one bar runs across both downloads ("Audio + video · …" in the notification), then *Merging video and
+    audio…*. The result shows the audio *and* "Video saved (720p)" with its own Play/Share/Open folder; the MP4 is in
+    `Movies/AudioSaver`, plays with sound in the gallery, shows the right length, and seeking works. Kill the network
+    during the video part: the audio is still saved, the card says why the video failed, *Retry video* fixes it
+    without a second audio file. Mix/album links don't show the switch; *Just this song* on a mix link does.
+11. **Robustness extras.** Lock the screen / switch apps mid-download (it continues); rotate during a download (progress
    survives); deny the notification permission (download still works, just without a notification).
 
 ## Known limitations
@@ -213,6 +254,9 @@ Use content you're allowed to download, e.g. Blender's *Big Buck Bunny* (CC BY):
 - YouTube may answer "Sign in to confirm you're not a bot" for some networks/IPs; the app reports exactly that.
 - Saved M4A keeps YouTube's fragmented MP4 layout (tags and brand fixed up, audio untouched). All common players and
   taggers handle it; a few very old players may show the duration only after a full scan.
+- Video: H.264 only, so at most 1080p (YouTube serves higher resolutions only as VP9/AV1). The MP4 keeps YouTube's
+  fragmented layout (what the merge produces); phones, galleries, VLC and browsers play and seek it, a few very old
+  players may not.
 - One download (or one batch) at a time, by design. A batch doesn't survive the app process being killed; downloaded
   songs stay, the rest can be picked again.
 - Mixes are generated by YouTube per request, so the song list can differ between two loads of the same link, and
