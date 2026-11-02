@@ -55,7 +55,13 @@ internal class DownloadNotifications(private val context: Context) {
                     builder.setProgress(0, 0, true)
                     context.getString(R.string.progress_unknown, formatBytes(state.bytesDownloaded))
                 }
-                builder.setContentText(if (state.withVideo) context.getString(R.string.with_video_prefix, text) else text)
+                builder.setContentText(
+                    when {
+                        state.videoOnly -> context.getString(R.string.video_only_prefix, text)
+                        state.withVideo -> context.getString(R.string.with_video_prefix, text)
+                        else -> text
+                    },
+                )
             }
             is DownloadState.Saving -> builder.setContentTitle(state.title)
                 .setContentText(context.getString(R.string.phase_saving))

@@ -25,6 +25,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -35,7 +36,6 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -62,6 +62,7 @@ import io.github.rudolfhk.audiosaver.core.engine.CollectionItem
 import io.github.rudolfhk.audiosaver.core.engine.CollectionPage
 import io.github.rudolfhk.audiosaver.core.engine.FailureReason
 import io.github.rudolfhk.audiosaver.core.engine.PageToken
+import io.github.rudolfhk.audiosaver.core.history.HistoryEntry
 import io.github.rudolfhk.audiosaver.core.link.LinkParseResult
 import io.github.rudolfhk.audiosaver.core.link.VideoId
 import io.github.rudolfhk.audiosaver.core.link.YouTubeLinkParser
@@ -82,7 +83,11 @@ data class MainUiState(
     val batch: BatchState?,
     val saveVideo: Boolean = false,
     val videoQuality: VideoQuality = VideoQuality.BEST,
+    val saveAudio: Boolean = true,
+    /** This video is already in the history as saved: a hint, never a block. */
+    val alreadySaved: HistoryEntry? = null,
 ) {
+    val anyFormat: Boolean get() = saveAudio || saveVideo
     val busy: Boolean get() = download.isActive || batch?.isActive == true
 }
 
@@ -101,17 +106,18 @@ interface MainActions {
     fun onReloadCollection()
     fun onRetryFailed()
     fun onDismissBatch()
+    fun onSaveAudio(value: Boolean)
     fun onSaveVideo(value: Boolean)
     fun onVideoQuality(quality: VideoQuality)
     fun onRetryVideo(videoId: VideoId)
 }
 
 @Composable
-fun MainScreen(state: MainUiState, actions: MainActions) {
+fun MainScreen(state: MainUiState, actions: MainActions, onOpenHistory: () -> Unit = {}) {
     val context = LocalContext.current
     val isCollection = state.target is Target.Collection
     val loadedListing = (state.collection as? CollectionUi.Loaded)?.listing
-    val canDownloadSingle = state.target is Target.Single && !state.busy
+    val canDownloadSingle = state.target is Target.Single && !state.busy && state.anyFormat
     var showInfo by rememberSaveable { mutableStateOf(false) }
 
     if (showInfo) InfoDialog(onDismiss = { showInfo = false })
@@ -149,6 +155,9 @@ fun MainScreen(state: MainUiState, actions: MainActions) {
                         style = MaterialTheme.typography.headlineMedium,
                         modifier = Modifier.weight(1f),
                     )
+                    IconButton(onClick = onOpenHistory) {
+                        Icon(painterResource(R.drawable.ic_history), contentDescription = stringResource(R.string.history_button))
+                    }
                     IconButton(onClick = { showInfo = true }) {
                         Icon(painterResource(R.drawable.ic_info), contentDescription = stringResource(R.string.info_button))
                     }
@@ -165,7 +174,7 @@ fun MainScreen(state: MainUiState, actions: MainActions) {
                     singleLine = true,
                     enabled = !state.busy,
                     isError = state.input.isNotBlank() && state.parsed is LinkParseResult.Invalid,
-                    supportingText = { ValidationText(state.input, state.parsed) },
+                    supportingText = { ValidationText(state.input, state.parsed, state.alreadySaved) },
                     trailingIcon = {
                         if (state.input.isEmpty()) {
                             TextButton(onClick = { clipboardText(context)?.let(actions::onInputChanged) }, enabled = !state.busy) {
@@ -188,20 +197,36 @@ fun MainScreen(state: MainUiState, actions: MainActions) {
             }
 
             if (isCollection) {
+                if (state.saveVideo || !state.saveAudio) {
+                    item {
+                        Text(
+                            stringResource(R.string.collections_audio_only),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
                 collectionSection(state, actions)
             } else {
                 item {
-                    VideoOption(
+                    FormatChooser(
                         enabled = !state.busy,
-                        checked = state.saveVideo,
+                        audio = state.saveAudio,
+                        video = state.saveVideo,
                         quality = state.videoQuality,
-                        onChecked = actions::onSaveVideo,
+                        onAudio = actions::onSaveAudio,
+                        onVideo = actions::onSaveVideo,
                         onQuality = actions::onVideoQuality,
                     )
                 }
                 item {
+                    val label = when {
+                        state.saveAudio && state.saveVideo -> R.string.download_with_video
+                        state.saveVideo -> R.string.download_video
+                        else -> R.string.download
+                    }
                     Button(onClick = actions::onDownload, enabled = canDownloadSingle, modifier = Modifier.fillMaxWidth()) {
-                        Text(stringResource(if (state.saveVideo) R.string.download_with_video else R.string.download))
+                        Text(stringResource(label))
                     }
                 }
                 item {
@@ -236,8 +261,13 @@ private fun ModeChooser(kindLabel: String, justThisSong: Boolean, enabled: Boole
 }
 
 @Composable
-private fun ValidationText(input: String, parsed: LinkParseResult) {
+private fun ValidationText(input: String, parsed: LinkParseResult, alreadySaved: HistoryEntry?) {
     when {
+        parsed is LinkParseResult.Valid && alreadySaved != null ->
+            Text(
+                stringResource(R.string.already_saved, parsed.videoId.value, formatDate(alreadySaved.timeMillis)),
+                color = MaterialTheme.colorScheme.tertiary,
+            )
         parsed is LinkParseResult.Valid ->
             Text(stringResource(R.string.valid_link, parsed.videoId.value), color = MaterialTheme.colorScheme.primary)
         parsed is LinkParseResult.Collection ->
@@ -272,7 +302,13 @@ private fun StatusCard(state: DownloadState, actions: MainActions) {
 
                 is DownloadState.Downloading -> {
                     PhaseHeader(
-                        stringResource(if (state.withVideo) R.string.phase_downloading_video else R.string.phase_downloading),
+                        stringResource(
+                            when {
+                                state.videoOnly -> R.string.phase_downloading_video_only
+                                state.withVideo -> R.string.phase_downloading_video
+                                else -> R.string.phase_downloading
+                            },
+                        ),
                         subtitle = state.title,
                     )
                     val fraction = state.fraction
@@ -393,31 +429,26 @@ private fun FileButtons(saved: SavedAudio, actions: MainActions) {
     }
 }
 
-/** "Also save video (MP4)" with the quality ceiling. Only shown for single videos. */
+/**
+ * What a single link produces: audio, video or both - equal choices. With neither selected the
+ * download button is disabled and a hint says why. The quality chips only matter for the video.
+ */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun VideoOption(
+private fun FormatChooser(
     enabled: Boolean,
-    checked: Boolean,
+    audio: Boolean,
+    video: Boolean,
     quality: VideoQuality,
-    onChecked: (Boolean) -> Unit,
+    onAudio: (Boolean) -> Unit,
+    onVideo: (Boolean) -> Unit,
     onQuality: (VideoQuality) -> Unit,
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .toggleable(value = checked, enabled = enabled, role = Role.Switch, onValueChange = onChecked),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text(stringResource(R.string.save_video), style = MaterialTheme.typography.bodyLarge)
-                Text(stringResource(R.string.save_video_hint), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            Switch(checked = checked, onCheckedChange = null, enabled = enabled)
-        }
-        if (checked) {
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        FormatRow(stringResource(R.string.format_audio), stringResource(R.string.format_audio_hint), audio, enabled, onAudio)
+        FormatRow(stringResource(R.string.format_video), stringResource(R.string.format_video_hint), video, enabled, onVideo)
+        if (video) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(start = 48.dp)) {
                 VideoQuality.entries.forEach { option ->
                     FilterChip(
                         selected = option == quality,
@@ -427,6 +458,25 @@ private fun VideoOption(
                     )
                 }
             }
+        }
+        if (!audio && !video) {
+            Text(stringResource(R.string.format_none), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+        }
+    }
+}
+
+@Composable
+private fun FormatRow(title: String, hint: String, checked: Boolean, enabled: Boolean, onChange: (Boolean) -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .toggleable(value = checked, enabled = enabled, role = Role.Checkbox, onValueChange = onChange),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Checkbox(checked = checked, onCheckedChange = null, enabled = enabled, modifier = Modifier.padding(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge)
+            Text(hint, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
@@ -515,6 +565,7 @@ private object NoActions : MainActions {
     override fun onReloadCollection() = Unit
     override fun onRetryFailed() = Unit
     override fun onDismissBatch() = Unit
+    override fun onSaveAudio(value: Boolean) = Unit
     override fun onSaveVideo(value: Boolean) = Unit
     override fun onVideoQuality(quality: VideoQuality) = Unit
     override fun onRetryVideo(videoId: VideoId) = Unit

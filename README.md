@@ -2,7 +2,8 @@
 
 A small, single-purpose Android app: **paste or share a YouTube link → an audio file appears in your phone's Music folder.**
 Paste a **mix, album or playlist** link instead and it lists the songs so you can tick which ones to download.
-For a single video you can optionally **also save the video as an MP4**.
+For a single video you choose what to save: **audio, video (MP4), or both**. A **history** lists every download — what was
+saved where, and what failed and why.
 No library, no accounts, no in-app playback, no browsing.
 
 > **Personal use only.** Use this app only for content you have the right to download: your own uploads, content under a
@@ -157,12 +158,21 @@ YouTube offers audio-only streams as AAC-LC ~128 kbps in MP4 (itag 140), HE-AAC 
   cookies" (NewPipeExtractor's `setConsentAccepted(true)`); with the default "reject all" value mix extraction fails
   there. The app sends that value. It keeps no cookie jar, so nothing is stored or tracked.
 
-## Optional MP4 video (single videos only)
+## Audio, video or both (single videos)
 
-Switch **Also save video (MP4)** on (remembered) and pick a ceiling: *Best (up to 1080p)*, *720p*, *480p* or *360p*.
-The audio file is saved exactly as before; the MP4 is an extra file in `Movies/AudioSaver/Artist - Title.mp4`
-(MediaStore Video collection, so galleries list it; still no storage permission). Not offered for mixes, albums or
-playlists.
+Two equal checkboxes, both remembered: **Audio (M4A)** and **Video (MP4)**. Any combination works; with neither the
+download button is disabled and says why. The button follows the choice (*Download audio* / *Download video* /
+*Download audio + video*); the quality chips — *Best (up to 1080p)*, *720p*, *480p*, *360p* — appear when Video is on.
+The audio goes to `Music/AudioSaver/`, the MP4 to `Movies/AudioSaver/Artist - Title.mp4` (MediaStore Video
+collection, so galleries list it; still no storage permission). Mixes, albums and playlists are always saved as audio
+(the list says so when Video is selected).
+
+**Why M4A and not MP3.** "Audio" is YouTube's own AAC stream in an M4A file, tagged, not re-encoded. MP3 would mean
+decoding and re-encoding (quality loss, an encoder library in the APK, slower) for no benefit: every phone, car and
+music server plays M4A.
+
+**Video only** still downloads the audio stream — it's the MP4's soundtrack — but saves only the MP4. If the video
+can't be made, that's a normal failed download (red card, specific reason, *Retry*), not a half success.
 
 **Why it needs merging.** YouTube no longer serves any single file with picture *and* sound: in the extractor's
 recorded responses (Aug–Oct 2026) the client NewPipe uses returns only video-only and audio-only DASH streams —
@@ -179,12 +189,30 @@ decode time (what a player reading front to back needs), absolute fragment offse
 file is then tagged (title, artist, year, source URL) like the audio.
 
 **Flow and failures.** Resolving → Downloading (one bar over audio + video when both sizes are known) → Saving the
-audio → Merging video and audio → saving the video. **The audio is saved first**, so a video problem never costs
-the song: the result shows "Audio saved, but the video failed: <specific reason>" with **Retry video**, which
-downloads only what the video needs and doesn't save a second audio copy. Free space is checked *before* the video
+audio → Merging video and audio → saving the video. **With both selected, the audio is saved first**, so a video
+problem never costs the song: the result shows "Audio saved, but the video failed: <specific reason>" with **Retry
+video**, which downloads only what the video needs and doesn't save a second audio copy. Every *Retry* repeats
+exactly what that download asked for, not whatever the checkboxes say now. Free space is checked *before* the video
 download (≈ 2 × video + 2 × audio while working); not enough is reported up front. Other specific video failures:
 no H.264 stream (*No downloadable MP4 video stream found*), audio only available as Opus/WebM (can't go in an MP4),
 HTTP errors, merge errors. Cancel stops everything and leaves no partial video.
+
+## History
+
+The clock icon opens the **history**: every finished download, newest first — single links and each song of a
+mix/album batch (with the mix/album name). Each entry shows the title, artist, time and, per requested format,
+either where the file was saved (name, folder, size, video quality) or why it failed (the same specific reason and
+detail as the error card). Filters: *All / Saved / Failed* (partly saved entries count as failed — something is
+missing). Saved entries have *Play* and *Open folder*; failed and partly saved ones have *Retry*, which puts the link
+back and asks again **only for what failed** (a partly saved entry retries just the video). Batch songs retry as
+single audio downloads. *Clear* (with confirmation) empties the list; files stay on the phone.
+
+- Not recorded: downloads you cancelled, and batch songs a cancelled batch never reached. Batch songs skipped
+  because YouTube started rate-limiting *are* recorded as failed ("Not attempted: …") — those are the ones to retry.
+- Pasting a link that's already in the history as saved shows "Already saved <when>" under the field — a hint,
+  it never blocks saving it again.
+- Stored only on the phone: an append-only JSON-lines file in app-private storage (`files/history.jsonl`, excluded
+  from backup), newest 1000 entries. A half-written line after a crash is skipped on the next start, not fatal.
 
 ## Test plan
 
@@ -197,7 +225,8 @@ HTTP errors, merge errors. Cancel stops everything and leaves no partial video.
 | `CollectionListingTest` (7) | default selection, unavailable rows, toggle / all / none, load-more de-dup keeping the user's choices, looping mix ends, 200-song cap, album vs mix batch contexts |
 | `DashMp4MuxerTest` (7, needs ffmpeg) | YouTube-style DASH (relative offsets, `dash` brand, sidx) and absolute-offset fragments with other fps/timescales/sample rates; audio longer than video; verified with ffprobe/ffmpeg: h264+aac, duration, no decode errors, **decoded video and audio bit-identical to the inputs**; structural checks that fragments are interleaved and durations are in `mvhd`/`mehd`/`tkhd` (ffmpeg would hide both); merged file taggable; swapped, non-fragmented, junk and truncated inputs rejected. Every check was confirmed to fail when the code it guards is broken. |
 | `VideoQualityTest` (5) | tallest H.264 within the ceiling (never VP9/AV1), 60 fps preferred, smallest if all are taller, no H.264 → none |
-| `VideoPipelineTest` (8, needs ffmpeg) | audio + merged, tagged, playable MP4; one progress bar over both, phase order; video HTTP failure keeps the audio; retry-video doesn't save audio again; no H.264 / not enough space / Opus-only audio reported without downloading the video; cancel mid-video leaves no temp or partial files |
+| `VideoPipelineTest` (9, needs ffmpeg) | audio + merged, tagged, playable MP4; one progress bar over both, phase order; video HTTP failure keeps the audio; video only saves just the MP4; a failing video-only download is a real failure; no H.264 / not enough space / Opus-only audio reported without downloading the video; cancel mid-video leaves no temp or partial files |
+| `HistoryTest` (14) | one entry per finished download however many progress updates; title/artist kept; partial (audio ✓ video ✗), video-only, failures before a title was known; cancelled not recorded; batch songs recorded once each, cancelled ones skipped, retry runs recorded again; survives restart (newest first); corrupt/half-written lines skipped; 1000-entry cap with compaction; clear; "already saved" ignores failures; unknown future reasons read back; retry asks only for what failed |
 | `BatchDownloaderTest` (5) | order, carries on after a failure, stops on rate-limiting without further requests, cancel keeps finished songs and cancels the rest, album track numbers/folder/tags, retry-failed keeps album context |
 | `HttpAudioDownloaderTest` (10) | chunked Range download, determinate vs indeterminate progress, server ignoring Range, resume after mid-chunk disconnect, 403 / 429, persistent network failure, empty responses, prompt cancel of a stalled read |
 | `AudioDownloadPipelineTest` (10) | phase order, tagged output, temp-file cleanup, extractor error pass-through (no download attempted), untaggable → saved with warning, WebM path, lying/failing storage → STORAGE error, cancel → Cancelled, file-name sanitising |
@@ -239,13 +268,21 @@ Use content you're allowed to download, e.g. Blender's *Big Buck Bunny* (CC BY):
    show "cancelled", no partial file remains. Put the phone in airplane mode during a batch: affected songs fail with
    "Network error"; turn it back on and *Retry failed* downloads just those.
 9. **Private list.** `https://www.youtube.com/playlist?list=WL` → inline "Watch later … can't be read without signing in".
-10. **Video.** Turn on *Also save video (MP4)*, pick *720p*, paste `https://youtu.be/aqz-KE-bpKQ`, tap *Download audio +
+10. **Video.** Tick *Video (MP4)* (keep *Audio*), pick *720p*, paste `https://youtu.be/aqz-KE-bpKQ`, tap *Download audio +
     video*: one bar runs across both downloads ("Audio + video · …" in the notification), then *Merging video and
     audio…*. The result shows the audio *and* "Video saved (720p)" with its own Play/Share/Open folder; the MP4 is in
     `Movies/AudioSaver`, plays with sound in the gallery, shows the right length, and seeking works. Kill the network
     during the video part: the audio is still saved, the card says why the video failed, *Retry video* fixes it
-    without a second audio file. Mix/album links don't show the switch; *Just this song* on a mix link does.
-11. **Robustness extras.** Lock the screen / switch apps mid-download (it continues); rotate during a download (progress
+    without a second audio file. Mix/album links don't show the checkboxes; *Just this song* on a mix link does.
+11. **Video only / neither.** Untick *Audio*: the button says *Download video*; only an MP4 appears (nothing new in
+    `Music/AudioSaver`). With airplane mode on it fails like any download (red card, *Retry*); *Retry* again saves only
+    the video. Untick both: the button is disabled and "Pick audio, video or both." appears.
+12. **History.** After the steps above, open the clock icon: saved songs show where they went (and the video quality),
+    the failed ones their reason; *Failed* filters them; *Retry* on a partly saved entry downloads just the video;
+    *Play* opens the file. Paste a link you saved before: "Already saved …" appears under the field, and downloading
+    it again still works. Force-stop the app and reopen: the history is still there. *Clear* empties it, the files
+    stay.
+13. **Robustness extras.** Lock the screen / switch apps mid-download (it continues); rotate during a download (progress
    survives); deny the notification permission (download still works, just without a notification).
 
 ## Known limitations

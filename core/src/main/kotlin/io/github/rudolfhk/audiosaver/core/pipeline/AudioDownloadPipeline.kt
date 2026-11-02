@@ -40,20 +40,28 @@ interface AudioSink {
 }
 
 /**
- * What to save for a single video. The audio file is the app's main job; the MP4 is an optional
- * extra. [saveAudio] = false is "retry just the video" after the audio was already saved.
+ * What to save for a single video: the audio file (M4A), the video file (MP4, at [video] quality),
+ * or both. With video only, the audio stream is still downloaded - it is the MP4's soundtrack - but
+ * no audio file is saved. Batches from mixes/albums always use [AUDIO_ONLY].
  */
 data class DownloadOptions(val saveAudio: Boolean = true, val video: VideoQuality? = null) {
     init {
         require(saveAudio || video != null) { "Nothing to download" }
     }
 
+    val saveVideo: Boolean get() = video != null
+
     companion object {
         val AUDIO_ONLY = DownloadOptions()
+        fun videoOnly(quality: VideoQuality) = DownloadOptions(saveAudio = false, video = quality)
     }
 }
 
-/** How the optional video part ended. The audio's outcome is reported separately. */
+/**
+ * How the video part ended. When both files were requested, this sits next to the audio's
+ * outcome (a failed video never costs the saved audio). For a video-only job a failure is
+ * reported as [DownloadState.Failed] instead, like any other failed download.
+ */
 sealed interface VideoResult {
     data class Saved(val saved: SavedAudio, val width: Int, val height: Int, val fps: Int, val warning: String?) : VideoResult
     data class Failed(val reason: FailureReason, val detail: String) : VideoResult
@@ -100,6 +108,9 @@ sealed interface DownloadState {
         val bytesDownloaded: Long,
         val totalBytes: Long?,
         val withVideo: Boolean = false,
+        /** Video-only job: the bytes include the soundtrack, but only an MP4 will be saved. */
+        val videoOnly: Boolean = false,
+        val uploader: String? = null,
     ) : DownloadState {
         val fraction: Float? get() = totalBytes?.let { (bytesDownloaded.toDouble() / it).toFloat().coerceIn(0f, 1f) }
     }
@@ -110,7 +121,7 @@ sealed interface DownloadState {
     data class Merging(val videoId: VideoId, val title: String) : DownloadState
 
     /**
-     * [saved] is the audio file (null only when the audio wasn't requested, i.e. "retry video");
+     * [saved] is the audio file (null when only the video was requested);
      * [video] is null when no video was requested.
      */
     data class Done(val videoId: VideoId, val saved: SavedAudio?, val taggingWarning: String?, val video: VideoResult? = null) : DownloadState
@@ -159,8 +170,8 @@ class AudioDownloadPipeline(
                 if (videoResult == null) videoStream = stream
             }
             if (!options.saveAudio && videoStream == null) {
-                onState(DownloadState.Done(videoId, null, null, videoResult))
-                return
+                // Video only and it can't be made: that's simply this download failing.
+                throw (videoResult as VideoResult.Failed).let { AudioSaveException(it.reason, it.detail) }
             }
 
             val audioLength = audio.stream.contentLength
@@ -169,7 +180,11 @@ class AudioDownloadPipeline(
                 // Audio only: whatever the server says (Content-Length) beats nothing. With a video,
                 // only a total covering both files is honest, otherwise the bar is indeterminate.
                 val shownTotal = if (videoStream == null) total ?: combinedTotal else combinedTotal
-                onState(DownloadState.Downloading(videoId, audio.title, done, shownTotal, withVideo = videoStream != null))
+                onState(
+                    DownloadState.Downloading(
+                        videoId, audio.title, done, shownTotal, withVideo = videoStream != null, videoOnly = !options.saveAudio, uploader = audio.uploader,
+                    ),
+                )
             }
             downloader.download(audio.stream, raw, audioProgress::report)
             audioProgress.flush()
@@ -190,7 +205,11 @@ class AudioDownloadPipeline(
                 videoResult = try {
                     val offset = raw.length()
                     val videoProgress = ThrottledProgress { done, _ ->
-                        onState(DownloadState.Downloading(videoId, audio.title, offset + done, combinedTotal, withVideo = true))
+                        onState(
+                            DownloadState.Downloading(
+                                videoId, audio.title, offset + done, combinedTotal, withVideo = true, videoOnly = !options.saveAudio, uploader = audio.uploader,
+                            ),
+                        )
                     }
                     downloader.download(videoStream, rawVideo, videoProgress::report)
                     videoProgress.flush()
@@ -205,7 +224,9 @@ class AudioDownloadPipeline(
                     )
                 }
             }
-            onState(DownloadState.Done(videoId, saved, taggingWarning, videoResult))
+            val result = videoResult
+            if (!options.saveAudio && result is VideoResult.Failed) throw AudioSaveException(result.reason, result.detail)
+            onState(DownloadState.Done(videoId, saved, taggingWarning, result))
         } catch (e: Exception) {
             // Blocking I/O aborted by cancellation surfaces as an IOException, not a CancellationException.
             if (e is CancellationException || !currentCoroutineContext().isActive) {

@@ -120,7 +120,7 @@ enum class FailureReason(val userTitle: String, val retryable: Boolean) {
     RATE_LIMITED("YouTube is rate-limiting this device", retryable = true),
     NETWORK("Network error", retryable = true),
     EXTRACTOR_BROKEN("YouTube changed something the extractor doesn't understand yet", retryable = true),
-    DOWNLOAD_FAILED("The audio download failed", retryable = true),
+    DOWNLOAD_FAILED("The download failed", retryable = true),
     STORAGE("Couldn't save the file", retryable = true),
     UNKNOWN("Something went wrong", retryable = true),
 }

@@ -6,30 +6,37 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
-import io.github.rudolfhk.audiosaver.ui.AudioSaverTheme
-import io.github.rudolfhk.audiosaver.ui.FileActions
+import io.github.rudolfhk.audiosaver.core.history.HistoryEntry
 import io.github.rudolfhk.audiosaver.core.link.VideoId
 import io.github.rudolfhk.audiosaver.core.pipeline.SavedAudio
 import io.github.rudolfhk.audiosaver.core.video.VideoQuality
+import io.github.rudolfhk.audiosaver.ui.AudioSaverTheme
+import io.github.rudolfhk.audiosaver.ui.FileActions
+import io.github.rudolfhk.audiosaver.ui.FormatPreferences
+import io.github.rudolfhk.audiosaver.ui.HistoryActions
+import io.github.rudolfhk.audiosaver.ui.HistoryScreen
 import io.github.rudolfhk.audiosaver.ui.MainActions
 import io.github.rudolfhk.audiosaver.ui.MainScreen
 import io.github.rudolfhk.audiosaver.ui.MainUiState
 import io.github.rudolfhk.audiosaver.ui.MainViewModel
-import io.github.rudolfhk.audiosaver.ui.VideoPreferences
 
 class MainActivity : ComponentActivity() {
 
     private val viewModel: MainViewModel by viewModels {
-        viewModelFactory { initializer { MainViewModel(audioSaverApp.controller, VideoPreferences(this@MainActivity)) } }
+        viewModelFactory { initializer { MainViewModel(audioSaverApp.controller, FormatPreferences(this@MainActivity)) } }
     }
     private var askedForNotifications = false
 
@@ -48,6 +55,7 @@ class MainActivity : ComponentActivity() {
         override fun onReloadCollection() = viewModel.reloadCollection()
         override fun onRetryFailed() = viewModel.retryFailed(this@MainActivity)
         override fun onDismissBatch() = viewModel.dismissBatch()
+        override fun onSaveAudio(value: Boolean) = viewModel.setSaveAudio(value)
         override fun onSaveVideo(value: Boolean) = viewModel.setSaveVideo(value)
         override fun onVideoQuality(quality: VideoQuality) = viewModel.setVideoQuality(quality)
         override fun onRetryVideo(videoId: VideoId) = viewModel.retryVideo(this@MainActivity, videoId)
@@ -71,12 +79,40 @@ class MainActivity : ComponentActivity() {
             val batch by viewModel.batch.collectAsStateWithLifecycle()
             val saveVideo by viewModel.saveVideo.collectAsStateWithLifecycle()
             val videoQuality by viewModel.videoQuality.collectAsStateWithLifecycle()
+            val saveAudio by viewModel.saveAudio.collectAsStateWithLifecycle()
+            val alreadySaved by viewModel.alreadySaved.collectAsStateWithLifecycle()
+            val history by viewModel.history.collectAsStateWithLifecycle()
+            var showHistory by rememberSaveable { mutableStateOf(false) }
 
             AudioSaverTheme {
-                MainScreen(
-                    MainUiState(input, parsed, target, justThisSong, download, collection, batch, saveVideo, videoQuality),
-                    actions,
-                )
+                if (showHistory) {
+                    BackHandler { showHistory = false }
+                    HistoryScreen(
+                        entries = history,
+                        actions = object : HistoryActions {
+                            override fun onClose() { showHistory = false }
+                            override fun onPlay(saved: SavedAudio) = FileActions.play(this@MainActivity, saved)
+                            override fun onOpenFolder(saved: SavedAudio) = FileActions.openFolder(this@MainActivity, saved)
+                            override fun onRetry(entry: HistoryEntry) {
+                                showHistory = false
+                                viewModel.retryFromHistory(this@MainActivity, entry)
+                            }
+                            override fun onClear() = viewModel.clearHistory()
+                        },
+                    )
+                } else {
+                    MainScreen(
+                        MainUiState(
+                            input, parsed, target, justThisSong, download, collection, batch,
+                            saveVideo = saveVideo,
+                            videoQuality = videoQuality,
+                            saveAudio = saveAudio,
+                            alreadySaved = alreadySaved,
+                        ),
+                        actions,
+                        onOpenHistory = { showHistory = true },
+                    )
+                }
             }
         }
         // Only on a fresh launch: after rotation the ViewModel already holds the text.

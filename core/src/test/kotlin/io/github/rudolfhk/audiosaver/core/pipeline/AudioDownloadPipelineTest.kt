@@ -86,7 +86,7 @@ class AudioDownloadPipelineTest {
         val done = assertIs<DownloadState.Done>(states.last())
         assertNull(done.taggingWarning)
         assertEquals("Rick Astley - Never Gonna Give You Up.m4a", done.saved!!.displayName)
-        val saved = File(File(tmp.root, "Music"), done.saved!!.displayName)
+        val saved = File(File(tmp.root, "Music"), done.saved.displayName)
         assertTrue(saved.length() > m4a.size, "tags should have grown the file")
         val text = saved.readBytes().toString(Charsets.ISO_8859_1)
         assertTrue(text.contains("Never Gonna Give You Up") && text.contains("Rick Astley") && text.contains("2009"))

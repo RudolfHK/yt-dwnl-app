@@ -26,12 +26,35 @@
     <string name="no_player">No app installed that can play %1$s files.</string>
     <string name="no_file_manager">No file manager could open the folder. The file is in %1$s.</string>
 
-    <string name="save_video">Also save video (MP4)</string>
-    <string name="save_video_hint">Merged with the audio on the phone, saved to Movies/AudioSaver. Videos can be large.</string>
+    <string name="format_audio">Audio (M4A)</string>
+    <string name="format_audio_hint">YouTube\'s own AAC audio, tagged, saved to Music/AudioSaver. Not MP3: no re-encoding, no quality loss.</string>
+    <string name="format_video">Video (MP4)</string>
+    <string name="format_video_hint">Picture and sound merged on the phone, saved to Movies/AudioSaver. Videos can be large.</string>
+    <string name="format_none">Pick audio, video or both.</string>
+    <string name="format_audio_short">Audio</string>
+    <string name="format_video_short">Video</string>
+    <string name="collections_audio_only">Mixes, albums and playlists are always saved as audio.</string>
+    <string name="download_video">Download video</string>
+    <string name="phase_downloading_video_only">Downloading video</string>
+    <string name="already_saved">Already saved %2$s · video ID %1$s (you can save it again)</string>
+    <string name="history_button">Download history</string>
+    <string name="history_title">History</string>
+    <string name="back">Back</string>
+    <string name="history_all">All (%1$d)</string>
+    <string name="history_saved">Saved (%1$d)</string>
+    <string name="history_failed">Failed (%1$d)</string>
+    <string name="history_empty">Nothing downloaded yet.</string>
+    <string name="history_empty_filter">Nothing in this list.</string>
+    <string name="history_clear">Clear</string>
+    <string name="history_clear_title">Clear the history?</string>
+    <string name="history_clear_text">This removes the list only. Saved music and videos stay on the phone.</string>
+    <string name="history_clear_confirm">Clear history</string>
+    <string name="history_privacy">The history is stored only on this phone (newest 1000 downloads) and never leaves it.</string>
     <string name="download_with_video">Download audio + video</string>
     <string name="phase_downloading_video">Downloading audio and video</string>
     <string name="phase_merging">Merging video and audio…</string>
     <string name="with_video_prefix">Audio + video · %1$s</string>
+    <string name="video_only_prefix">Video · %1$s</string>
     <string name="video_saved_title">Video saved (%1$dp)</string>
     <string name="video_failed_title">Audio saved, but the video failed: %1$s</string>
     <string name="retry_video">Retry video</string>
@@ -73,7 +96,8 @@
         <item>Downloads that stream straight from YouTube\'s servers in resumable chunks, in a background service so it keeps going when you leave the app.</item>
         <item>Writes title, artist, year and the source link into the file as tags. The audio itself is never re-encoded, so it stays exactly as YouTube serves it.</item>
         <item>Saves it to Music/AudioSaver (album songs to Music/AudioSaver/Album name, with album and track number tags) through Android\'s MediaStore, so no storage permission is needed, then checks that the saved file is complete.</item>
-        <item>Optional, for single videos: with "Also save video (MP4)" on, it also downloads YouTube\'s H.264 video stream (up to the quality you pick, at most 1080p) and merges it with the same audio into an MP4 on the phone - again without re-encoding. The audio is saved first, so a failed video never costs you the song.</item>
+        <item>For a single video you choose what to save: Audio (M4A), Video (MP4) or both. For a video it also downloads YouTube\'s H.264 picture stream (up to the quality you pick, at most 1080p) and merges it with the audio into an MP4 on the phone - again without re-encoding. With both selected the audio is saved first, so a failed video never costs you the song. Mixes, albums and playlists are saved as audio.</item>
+        <item>Every finished download - saved, partly saved or failed, with the reason - goes into the History (clock icon), stored only on the phone.</item>
     </string-array>
     <string name="info_errors_title">Why some downloads fail</string>
     <string name="info_errors_intro">YouTube has no official download API. The app reads YouTube the way a browser does, and YouTube changes its site often and deliberately makes this harder. When something goes wrong, the error card says exactly what happened:</string>

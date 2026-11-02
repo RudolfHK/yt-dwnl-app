@@ -6,6 +6,8 @@ import androidx.lifecycle.viewModelScope
 import io.github.rudolfhk.audiosaver.core.collection.CollectionListing
 import io.github.rudolfhk.audiosaver.core.engine.AudioSaveException
 import io.github.rudolfhk.audiosaver.core.engine.FailureReason
+import io.github.rudolfhk.audiosaver.core.history.HistoryEntry
+import io.github.rudolfhk.audiosaver.core.history.retryOptions
 import io.github.rudolfhk.audiosaver.core.link.CollectionRef
 import io.github.rudolfhk.audiosaver.core.link.LinkParseResult
 import io.github.rudolfhk.audiosaver.core.link.VideoId
@@ -46,28 +48,47 @@ sealed interface CollectionUi {
 
 class MainViewModel(
     private val controller: DownloadController,
-    private val videoPrefs: VideoPreferences,
+    private val formats: FormatPreferences,
 ) : ViewModel() {
 
-    /** Optional MP4 next to the audio; single videos only (never offered for mixes/albums). */
-    private val _saveVideo = MutableStateFlow(videoPrefs.enabled)
+    // What a single link produces: audio, video or both. Mixes/albums are always saved as audio.
+    private val _saveAudio = MutableStateFlow(formats.audio)
+    val saveAudio: StateFlow<Boolean> = _saveAudio.asStateFlow()
+
+    private val _saveVideo = MutableStateFlow(formats.video)
     val saveVideo: StateFlow<Boolean> = _saveVideo.asStateFlow()
 
-    private val _videoQuality = MutableStateFlow(videoPrefs.quality)
+    private val _videoQuality = MutableStateFlow(formats.quality)
     val videoQuality: StateFlow<VideoQuality> = _videoQuality.asStateFlow()
+
+    fun setSaveAudio(value: Boolean) {
+        _saveAudio.value = value
+        formats.audio = value
+    }
 
     fun setSaveVideo(value: Boolean) {
         _saveVideo.value = value
-        videoPrefs.enabled = value
+        formats.video = value
     }
 
     fun setVideoQuality(value: VideoQuality) {
         _videoQuality.value = value
-        videoPrefs.quality = value
+        formats.quality = value
     }
 
-    private fun singleOptions() =
-        if (_saveVideo.value) DownloadOptions(video = _videoQuality.value) else DownloadOptions.AUDIO_ONLY
+    /** Null when neither format is selected - the download button is disabled then. */
+    private fun singleOptions(): DownloadOptions? {
+        val video = _videoQuality.value.takeIf { _saveVideo.value }
+        return if (_saveAudio.value || video != null) DownloadOptions(saveAudio = _saveAudio.value, video = video) else null
+    }
+
+    val history: StateFlow<List<HistoryEntry>> = controller.history.entries
+
+    /** The pasted video was already saved before: shown as a hint, never blocks a new download. */
+    val alreadySaved: StateFlow<HistoryEntry?> by lazy {
+        combine(target, history) { t, _ -> (t as? Target.Single)?.let { controller.history.lastSaved(it.videoId.value) } }
+            .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+    }
 
     private val _input = MutableStateFlow("")
     val input: StateFlow<String> = _input.asStateFlow()
@@ -199,7 +220,7 @@ class MainViewModel(
 
     fun startDownload(context: Context) {
         when (val t = target.value) {
-            is Target.Single -> controller.start(context, t.videoId, singleOptions())
+            is Target.Single -> singleOptions()?.let { controller.start(context, t.videoId, it) }
             is Target.Collection -> {
                 val listing = (_collection.value as? CollectionUi.Loaded)?.listing ?: return
                 controller.startBatch(context, listing.toBatchRequest())
@@ -208,15 +229,31 @@ class MainViewModel(
         }
     }
 
+    /** Repeats exactly what the failed download asked for - not whatever the toggles say now. */
     fun retry(context: Context, videoId: VideoId) {
         controller.dismissResult()
-        controller.start(context, videoId, singleOptions())
+        controller.start(context, videoId, controller.lastOptions)
     }
 
-    /** The audio was saved but the video wasn't: try only the video again, without a second audio copy. */
+    /** Audio and video were asked for, the audio was saved, the video wasn't: try only the video again. */
     fun retryVideo(context: Context, videoId: VideoId) {
         controller.dismissResult()
-        controller.start(context, videoId, DownloadOptions(saveAudio = false, video = _videoQuality.value))
+        val quality = controller.lastOptions.video ?: _videoQuality.value
+        controller.start(context, videoId, DownloadOptions.videoOnly(quality))
+    }
+
+    /**
+     * "Retry" in the history: put the link back and ask again for what *failed* - for a partly saved
+     * entry (audio saved, video failed) that's just the video, so the audio isn't saved twice.
+     * Songs from a mix/album come back as single audio downloads (album numbering isn't kept).
+     */
+    fun retryFromHistory(context: Context, entry: HistoryEntry) {
+        onInputChanged(entry.watchUrl)
+        controller.start(context, VideoId.of(entry.videoId), entry.retryOptions())
+    }
+
+    fun clearHistory() {
+        viewModelScope.launch { controller.history.clear() }
     }
 
     fun retryFailed(context: Context) {

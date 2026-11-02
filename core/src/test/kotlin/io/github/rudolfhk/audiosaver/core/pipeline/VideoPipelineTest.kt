@@ -164,20 +164,32 @@ class VideoPipelineTest {
         run()
         val done = assertIs<DownloadState.Done>(states.last())
         assertNotNull(done.saved)
-        assertTrue(File(out, done.saved!!.displayName).exists())
+        assertTrue(File(out, done.saved.displayName).exists())
         val failed = assertIs<VideoResult.Failed>(done.video)
         assertEquals(FailureReason.DOWNLOAD_FAILED, failed.reason)
         assertTrue(failed.detail.contains("403"), failed.detail)
         assertTrue(workLeftovers().isEmpty())
     }
 
-    @Test fun `retry video only does not save the audio again`() {
-        run(options = DownloadOptions(saveAudio = false, video = VideoQuality.BEST))
+    @Test fun `video only saves just the mp4`() {
+        run(options = DownloadOptions.videoOnly(VideoQuality.BEST))
         val done = assertIs<DownloadState.Done>(states.last())
         assertNull(done.saved)
         assertIs<VideoResult.Saved>(done.video)
         assertFalse(states.any { it is DownloadState.Saving }, "no audio save phase")
+        assertTrue(states.filterIsInstance<DownloadState.Downloading>().all { it.videoOnly && it.withVideo })
         assertEquals(emptyList(), out.listFiles()!!.filter { it.isFile }.map { it.name }, "no audio file written")
+        assertEquals(1, File(out, "video").list()!!.size)
+    }
+
+    @Test fun `a failing video-only download is a real failure, not a half success`() {
+        videoStatus = 403
+        run(options = DownloadOptions.videoOnly(VideoQuality.BEST))
+        val failed = assertIs<DownloadState.Failed>(states.last())
+        assertEquals(FailureReason.DOWNLOAD_FAILED, failed.reason)
+        assertTrue(failed.detail.contains("403"), failed.detail)
+        assertEquals(emptyList(), out.listFiles().orEmpty().filter { it.isFile }.map { it.name })
+        assertTrue(workLeftovers().isEmpty())
     }
 
     @Test fun `no h264 stream fails the video before downloading it`() {
@@ -200,10 +212,13 @@ class VideoPipelineTest {
         assertTrue(states.filterIsInstance<DownloadState.Downloading>().none { it.withVideo })
     }
 
-    @Test fun `retry video only with no usable stream ends without downloading anything`() {
-        run(engine(container = AudioContainer.WEBM_OPUS), DownloadOptions(saveAudio = false, video = VideoQuality.BEST))
-        val done = assertIs<DownloadState.Done>(states.last())
-        assertEquals(FailureReason.NO_AUDIO_STREAM, assertIs<VideoResult.Failed>(done.video).reason)
+    @Test fun `video only with no usable stream fails without downloading anything`() {
+        run(engine(container = AudioContainer.WEBM_OPUS), DownloadOptions.videoOnly(VideoQuality.BEST))
+        assertEquals(FailureReason.NO_AUDIO_STREAM, assertIs<DownloadState.Failed>(states.last()).reason)
+        assertTrue(requested.isEmpty())
+        states.clear()
+        run(engine(videoStreams = emptyList()), DownloadOptions.videoOnly(VideoQuality.P720))
+        assertEquals(FailureReason.NO_VIDEO_STREAM, assertIs<DownloadState.Failed>(states.last()).reason)
         assertTrue(requested.isEmpty())
     }
 
