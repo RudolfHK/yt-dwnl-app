@@ -20,8 +20,11 @@ No library, no accounts, no in-app playback, no browsing.
 
 - **Android Studio** (a version supporting AGP 9.2): open the project folder, let it sync, run the `app` configuration.
 - **Command line:** `./gradlew :app:assembleDebug` → `app/build/outputs/apk/debug/app-debug.apk`
-- **CI:** every push runs `.github/workflows/build.yml` (unit tests, lint, debug APK). The APK is attached to the run as
-  the `audiosaver-debug-apk` artifact, so you can install without building locally.
+- **CI:** every push runs `.github/workflows/build.yml`: unit tests, lint and the debug APK (attached to the run as
+  the `audiosaver-debug-apk` artifact, so you can install without building locally), plus **instrumented tests on
+  Android emulators (API 29 and 35)** that check the video and audio files the way a phone reads them. A
+  `live-youtube` job (manual: *Run workflow*) runs the real-YouTube tests — but YouTube currently answers every
+  GitHub runner with "confirm you're not a bot", so run those from a home network instead (see *Test plan*).
 
 NewPipeExtractor is only published on JitPack. If JitPack ever fails to serve the pinned commit, do what NewPipe does:
 change the hash in `gradle/libs.versions.toml` (e.g. use a different, newer commit, or add/remove a character so JitPack
@@ -181,12 +184,25 @@ height (higher fps, then bitrate, break ties) and merges it with the AAC audio i
 it plays on every phone, gallery and TV; above 1080p YouTube only offers VP9/AV1, which many devices can't play in
 MP4, so that's out of scope.
 
-**How, without FFmpeg.** Both streams are fragmented MP4, so `DashMp4Muxer` merges them at the box level, the same
-way `Mp4Tagger` works: one `moov` with both tracks (ids renumbered, real durations written into
-`mvhd`/`tkhd`/`mdhd`/`mehd` so galleries show the length), the `moof`/`mdat` fragments of both tracks interleaved by
-decode time (what a player reading front to back needs), absolute fragment offsets moved, per-track indexes
-(`sidx`/`mfra`) dropped. Nothing is decoded or re-encoded, so quality is exactly YouTube's and it's fast. The merged
-file is then tagged (title, artist, year, source URL) like the audio.
+**How, without FFmpeg.** Both streams are fragmented MP4. `DashMp4Muxer` reads every fragment's sample table
+(`trun`, with the `tfhd`/`trex` defaults and all three ways of addressing the data) and writes an **ordinary,
+non-fragmented MP4**: `ftyp`, `moov` (both tracks with rebuilt `stts`/`ctts`/`stss`/`stsc`/`stsz`/`stco`|`co64`
+tables and real durations), then one `mdat` with the sample data of both tracks interleaved by time. `moov` first,
+so it starts playing before it's fully read. Nothing is decoded or re-encoded, so quality is exactly YouTube's and
+it's fast. The merged file is then tagged (title, artist, year, source URL) like the audio.
+
+*Why not keep the fragments* (the first version did): Android's own MP4 extractor (MediaExtractor/MediaPlayer)
+moves to the next fragment in the file and treats one without its track as the end — so on phones such files
+played **one second** of video. ffmpeg, VLC and ExoPlayer cope, which is why only the emulator test caught it.
+
+**How the streams are requested.** With this extractor version every stream URL comes from YouTube's visionOS
+client. NewPipe's own player fetches those with the visionOS User-Agent, as a POST with the byte range in a
+`range=` query parameter (`YoutubeHttpDataSource`); the app first used a plain GET with a desktop User-Agent and a
+`Range` header. Which of these YouTube accepts can't be checked from CI (bot check), so the engine lists the
+styles in order — NewPipe player style, GET + visionOS UA, GET + desktop UA — and the downloader moves to the next
+when YouTube refuses one (HTTP 400/401/403) and keeps whichever works. A server that ignores the range parameter
+and sends the whole file is caught by its `Content-Length`, never written as wrong bytes.
+`LiveStreamRequestDiagnostic` (opt-in live test) prints which styles work today.
 
 **Flow and failures.** Resolving → Downloading (one bar over audio + video when both sizes are known) → Saving the
 audio → Merging video and audio → saving the video. **With both selected, the audio is saved first**, so a video
@@ -223,15 +239,16 @@ single audio downloads. *Clear* (with confirmation) empties the list; files stay
 | `YouTubeLinkParserTest` (13) | watch / youtu.be share links (`?si=`) / m. / music. / shorts / live / embed / nocookie / bare IDs / links inside shared text; mix (incl. seed derivation, genre mixes), music mix, album and playlist links; private (`LL`/`WL`) and malformed lists; empty, garbage, other hosts, look-alike hosts, wrong-length IDs, channel links, with reasons |
 | `Mp4TaggerTest` (9, needs ffmpeg on PATH) | YouTube-style DASH fMP4, fragmented+`mfra`, faststart (`stco`), moov-at-end; album / album-artist / track `3/10` tags; no album fields for mixes; re-tagging replaces tags; junk and truncated input rejected. Verified with ffprobe + bit-identical decoded-audio MD5 |
 | `CollectionListingTest` (7) | default selection, unavailable rows, toggle / all / none, load-more de-dup keeping the user's choices, looping mix ends, 200-song cap, album vs mix batch contexts |
-| `DashMp4MuxerTest` (7, needs ffmpeg) | YouTube-style DASH (relative offsets, `dash` brand, sidx) and absolute-offset fragments with other fps/timescales/sample rates; audio longer than video; verified with ffprobe/ffmpeg: h264+aac, duration, no decode errors, **decoded video and audio bit-identical to the inputs**; structural checks that fragments are interleaved and durations are in `mvhd`/`mehd`/`tkhd` (ffmpeg would hide both); merged file taggable; swapped, non-fragmented, junk and truncated inputs rejected. Every check was confirmed to fail when the code it guards is broken. |
+| `DashMp4MuxerTest` (9, needs ffmpeg) | YouTube-style DASH (relative offsets, `dash` brand, sidx) and absolute-offset fragments with other fps/timescales/sample rates; audio longer than video; DASH zero-length edit lists; verified with ffprobe/ffmpeg: h264+aac, duration, no decode errors, **decoded video and audio bit-identical to the inputs** (B-frame order included); structural checks: regular `ftyp/moov/mdat` layout, keyframe table for video, chunks interleaved, durations in `mvhd`/`tkhd` (ffmpeg would hide these); merged file taggable; swapped, non-fragmented, junk and truncated inputs rejected. Every check was confirmed to fail when the code it guards is broken. |
+| `VideoOnDeviceTest` (5, **Android emulator, API 29 + 35, in CI**) | merges YouTube-style fixtures *on the device* and reads the result like a phone: `MediaMetadataRetriever` (duration, video + audio, 320×240, title/artist), `MediaExtractor` (both tracks demux to the end, seeking lands near the target), `MediaPlayer.prepare`; saves through the real MediaStore sink into `Movies/AudioSaver` and reads it back from there; checks Android reads the audio file's title/artist/album/track tags |
 | `VideoQualityTest` (5) | tallest H.264 within the ceiling (never VP9/AV1), 60 fps preferred, smallest if all are taller, no H.264 → none |
 | `VideoPipelineTest` (9, needs ffmpeg) | audio + merged, tagged, playable MP4; one progress bar over both, phase order; video HTTP failure keeps the audio; video only saves just the MP4; a failing video-only download is a real failure; no H.264 / not enough space / Opus-only audio reported without downloading the video; cancel mid-video leaves no temp or partial files |
 | `HistoryTest` (14) | one entry per finished download however many progress updates; title/artist kept; partial (audio ✓ video ✗), video-only, failures before a title was known; cancelled not recorded; batch songs recorded once each, cancelled ones skipped, retry runs recorded again; survives restart (newest first); corrupt/half-written lines skipped; 1000-entry cap with compaction; clear; "already saved" ignores failures; unknown future reasons read back; retry asks only for what failed |
 | `BatchDownloaderTest` (5) | order, carries on after a failure, stops on rate-limiting without further requests, cancel keeps finished songs and cancels the rest, album track numbers/folder/tags, retry-failed keeps album context |
-| `HttpAudioDownloaderTest` (10) | chunked Range download, determinate vs indeterminate progress, server ignoring Range, resume after mid-chunk disconnect, 403 / 429, persistent network failure, empty responses, prompt cancel of a stalled read |
+| `HttpAudioDownloaderTest` (15) | chunked Range download, determinate vs indeterminate progress, server ignoring Range, resume after mid-chunk disconnect, 403 / 429, persistent network failure, empty responses, prompt cancel of a stalled read; request styles: NewPipe player style (POST, `range`/`rn` parameters, headers), fallback after a refusal that sticks for later chunks, a server ignoring the range parameter detected, refusal by every style names them, fallback for unknown sizes |
 | `AudioDownloadPipelineTest` (10) | phase order, tagged output, temp-file cleanup, extractor error pass-through (no download attempted), untaggable → saved with warning, WebM path, lying/failing storage → STORAGE error, cancel → Cancelled, file-name sanitising |
 | `NewPipeExtractionEngineTest` (10) | NewPipe exception → `FailureReason` mapping keeps the original message; stream choice (original track, M4A over Opus, bitrate, progressive only); "- Topic" cleanup; playlist entries → items (incl. `&list=` URLs), non-downloadable entries, album title prefix; only progressive MP4 video-only streams offered, size from itag data or the "1080p60" label |
-| `LiveYouTubeTest` (5, opt-in: `LIVE_YOUTUBE=1`) | Real YouTube: resolves a Creative-Commons video, full pipeline to a tagged file, unavailable ID → `UNAVAILABLE`, lists that video's mix and loads a second page, saves a merged ≤480p MP4 next to the audio. **Run this first when "downloads stopped working"** — it tells you whether YouTube/the extractor broke. |
+| `LiveYouTubeTest` (6) + `LiveStreamRequestDiagnostic` (1), opt-in: `LIVE_YOUTUBE=1 ./gradlew :engine-newpipe:test --tests '*Live*'` | Real YouTube: resolves a Creative-Commons video, full pipeline to a tagged file, unavailable ID → `UNAVAILABLE`, lists that video's mix and loads a second page, saves a merged ≤480p MP4 (audio + video, and video only) and checks it with ffprobe/ffmpeg; the diagnostic prints which request styles YouTube's stream servers accept. Needs a network YouTube doesn't bot-check (not GitHub's runners). **Run this first when "downloads stopped working"** — it tells you whether YouTube/the extractor broke. |
 
 ### Manual, on a device or emulator
 
@@ -291,9 +308,9 @@ Use content you're allowed to download, e.g. Blender's *Big Buck Bunny* (CC BY):
 - YouTube may answer "Sign in to confirm you're not a bot" for some networks/IPs; the app reports exactly that.
 - Saved M4A keeps YouTube's fragmented MP4 layout (tags and brand fixed up, audio untouched). All common players and
   taggers handle it; a few very old players may show the duration only after a full scan.
-- Video: H.264 only, so at most 1080p (YouTube serves higher resolutions only as VP9/AV1). The MP4 keeps YouTube's
-  fragmented layout (what the merge produces); phones, galleries, VLC and browsers play and seek it, a few very old
-  players may not.
+- Video: H.264 only, so at most 1080p (YouTube serves higher resolutions only as VP9/AV1).
+- Not yet verified against real YouTube: the request style YouTube's stream servers accept (see above; the app
+  falls back automatically) and very long videos. Run the live tests from a home network to confirm.
 - One download (or one batch) at a time, by design. A batch doesn't survive the app process being killed; downloaded
   songs stay, the rest can be picked again.
 - Mixes are generated by YouTube per request, so the song list can differ between two loads of the same link, and
