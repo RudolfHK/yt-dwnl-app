@@ -17,7 +17,8 @@ import kotlin.test.assertTrue
 /**
  * Merges real ffmpeg-made DASH streams and checks the result with ffprobe/ffmpeg as independent
  * readers: two streams, the right duration, no decode errors, and decoded audio *and* video
- * bit-identical to the inputs. Skipped when ffmpeg isn't installed.
+ * bit-identical to the inputs (frame order included, so B-frame timing must be right). Skipped when
+ * ffmpeg isn't installed. What Android itself makes of the file is checked by VideoOnDeviceTest.
  */
 class DashMp4MuxerTest {
 
@@ -103,9 +104,17 @@ class DashMp4MuxerTest {
     }
 
     // ---- structural checks: what a player reading the file front to back actually sees.
-    // (ffmpeg itself re-sorts packets and recomputes durations, so it can't check these.)
+    // (ffmpeg itself recomputes durations and copes with odd layouts, so it can't check these.)
 
-    private class Layout(val trackOrder: List<Long>, val movieSeconds: Double, val mehdSeconds: Double, val trackSeconds: List<Double>)
+    private class Layout(
+        val topLevel: List<String>,
+        val movieSeconds: Double,
+        val trackSeconds: List<Double>,
+        /** Chunk offsets per track (from stco/co64). */
+        val chunks: List<List<Long>>,
+        val hasSyncTable: List<Boolean>,
+        val hasCompositionTable: List<Boolean>,
+    )
 
     private fun layout(file: File): Layout {
         val b = file.readBytes()
@@ -115,31 +124,46 @@ class DashMp4MuxerTest {
             val list = mutableListOf<Triple<String, Int, Int>>()
             var p = start
             while (p + 8 <= end) {
-                val size = u32(p).toInt()
+                val size = u32(p).let { if (it == 1L) u64(p + 8) else it }.toInt()
                 list += Triple(String(b, p + 4, 4, Charsets.ISO_8859_1), p, size)
                 p += size
             }
             return list
         }
-        fun child(parent: Triple<String, Int, Int>, type: String) = boxes(parent.second + 8, parent.second + parent.third).first { it.first == type }
+        fun kids(parent: Triple<String, Int, Int>) = boxes(parent.second + 8, parent.second + parent.third)
+        fun child(parent: Triple<String, Int, Int>, type: String) = kids(parent).firstOrNull { it.first == type }
         val top = boxes(0, b.size)
         val moov = top.first { it.first == "moov" }
-        val mvhd = child(moov, "mvhd")
+        val mvhd = child(moov, "mvhd")!!
         val movieTimescale = u32(mvhd.second + 8 + 12).toDouble()
-        val mehd = child(child(moov, "mvex"), "mehd")
-        val trackSeconds = boxes(moov.second + 8, moov.second + moov.third).filter { it.first == "trak" }.map { trak ->
-            val tkhd = child(trak, "tkhd")
-            u32(tkhd.second + 8 + 20) / movieTimescale
+        val traks = kids(moov).filter { it.first == "trak" }
+        val stbls = traks.map { child(child(child(it, "mdia")!!, "minf")!!, "stbl")!! }
+        val chunks = stbls.map { stbl ->
+            child(stbl, "stco")?.let { stco -> (0 until u32(stco.second + 12).toInt()).map { u32(stco.second + 16 + 4 * it) } }
+                ?: child(stbl, "co64")!!.let { co64 -> (0 until u32(co64.second + 12).toInt()).map { u64(co64.second + 16 + 8 * it) } }
         }
-        val order = top.filter { it.first == "moof" }.map { moof -> u32(child(child(moof, "traf"), "tfhd").second + 8 + 4) }
-        return Layout(order, u32(mvhd.second + 8 + 16) / movieTimescale, u64(mehd.second + 8 + 4) / movieTimescale, trackSeconds)
+        return Layout(
+            topLevel = top.map { it.first },
+            movieSeconds = u32(mvhd.second + 8 + 16) / movieTimescale,
+            trackSeconds = traks.map { u32(child(it, "tkhd")!!.second + 8 + 20) / movieTimescale },
+            chunks = chunks,
+            hasSyncTable = stbls.map { child(it, "stss") != null },
+            hasCompositionTable = stbls.map { child(it, "ctts") != null },
+        )
     }
 
-    @Test fun `fragments are interleaved by time, not one track after the other`() {
-        val out = assertMerged(dashVideo(), dashAudio(), 6.0)
-        val order = layout(out).trackOrder
-        assertEquals(setOf(1L, 2L), order.toSet())
-        // Both tracks have ~1 s fragments, so a front-to-back reader must see them alternate.
+    @Test fun `output is a regular mp4 that Android's own extractor can read to the end`() {
+        // Android's MPEG4Extractor stops at the first fragment without its track, so the output
+        // must not be fragmented at all: moov first (plays while downloading), then one mdat.
+        val l = layout(assertMerged(dashVideo(), dashAudio(), 6.0))
+        assertEquals(listOf("ftyp", "moov", "mdat"), l.topLevel)
+        assertEquals(listOf(true, false), l.hasSyncTable, "keyframe table for video only (every audio sample is a sync sample)")
+        assertEquals(true, l.hasCompositionTable[0], "x264's B-frames need composition offsets")
+    }
+
+    @Test fun `chunks of both tracks are interleaved by time, not one track after the other`() {
+        val l = layout(assertMerged(dashVideo(), dashAudio(), 6.0))
+        val order = (l.chunks[0].map { it to 1 } + l.chunks[1].map { it to 2 }).sortedBy { it.first }.map { it.second }
         val switches = order.zipWithNext().count { (a, b) -> a != b }
         assertTrue(switches >= order.size / 2, "track order in file: $order")
     }
@@ -147,9 +171,55 @@ class DashMp4MuxerTest {
     @Test fun `durations are written where galleries read them`() {
         val l = layout(assertMerged(dashVideo(seconds = 4), dashAudio(seconds = 6), 6.0))
         assertTrue(abs(l.movieSeconds - 6.0) < 0.1, "mvhd ${l.movieSeconds}")
-        assertTrue(abs(l.mehdSeconds - 6.0) < 0.1, "mehd ${l.mehdSeconds}")
         assertEquals(2, l.trackSeconds.size)
         assertTrue(abs(l.trackSeconds[0] - 4.0) < 0.1 && abs(l.trackSeconds[1] - 6.0) < 0.1, "tkhd ${l.trackSeconds}")
+    }
+
+    /**
+     * The DASH fixture with `edts/elst` inserted into its video trak after `tkhd`: one entry with
+     * duration 0 ("whole track" in DASH) and, as real encoders write it, media_time = the first
+     * frame's presentation time (B-frames delay it). Fragment offsets are moof-relative, so growing
+     * moov is safe.
+     */
+    private fun withZeroLengthEdit(dash: File, mediaTime: Int): File {
+        val b = dash.readBytes()
+        fun u32(at: Int) = java.nio.ByteBuffer.wrap(b, at, 4).int
+        fun box(type: String, payload: ByteArray) =
+            java.nio.ByteBuffer.allocate(8 + payload.size).putInt(8 + payload.size).put(type.toByteArray(Charsets.ISO_8859_1)).put(payload).array()
+        var p = 0
+        while (String(b, p + 4, 4, Charsets.ISO_8859_1) != "moov") p += u32(p)
+        val moovStart = p
+        var t = moovStart + 8
+        while (String(b, t + 4, 4, Charsets.ISO_8859_1) != "trak") t += u32(t)
+        val tkhdEnd = t + 8 + u32(t + 8)
+        val elst = box("elst", java.nio.ByteBuffer.allocate(4 + 4 + 12).putInt(0).putInt(1).putInt(0).putInt(mediaTime).putInt(0x00010000).array())
+        val edts = box("edts", elst)
+        val out = java.io.ByteArrayOutputStream()
+        out.write(b, 0, tkhdEnd)
+        out.write(edts)
+        out.write(b, tkhdEnd, b.size - tkhdEnd)
+        val patched = out.toByteArray()
+        // grow moov and trak sizes
+        java.nio.ByteBuffer.wrap(patched, moovStart, 4).putInt(u32(moovStart) + edts.size)
+        java.nio.ByteBuffer.wrap(patched, t, 4).putInt(u32(t) + edts.size)
+        return File(tmp.root, "edts-" + dash.name).apply { writeBytes(patched) }
+    }
+
+    @Test fun `a zero-length dash edit list becomes the real track duration`() {
+        val dash = dashVideo()
+        val firstPts = run("ffprobe", "-v", "error", "-select_streams", "v", "-show_entries", "packet=pts", "-of", "csv=p=0", dash.absolutePath)
+            .second.lines().first().trim().toInt()
+        assertEquals(1024, firstPts, "fixture assumption: x264's B-frames present the first frame at 1024/12800 s")
+        val video = withZeroLengthEdit(dash, mediaTime = firstPts)
+        val out = assertMerged(video, dashAudio(), 6.0)
+        val b = out.readBytes()
+        val at = String(b, Charsets.ISO_8859_1).indexOf("elst")
+        assertTrue(at > 0, "edit list kept")
+        val segmentDuration = java.nio.ByteBuffer.wrap(b, at + 4 + 4 + 4, 4).int.toUInt().toLong()
+        val l = layout(out)
+        val movieTimescale = segmentDuration / l.trackSeconds[0]
+        assertTrue(segmentDuration > 0, "a zero-length edit in a regular MP4 means 'show nothing'")
+        assertTrue(abs(segmentDuration / movieTimescale - 6.0) < 0.1, "edit covers the track: $segmentDuration")
     }
 
     @Test fun `the merged file can be tagged like the audio`() {
