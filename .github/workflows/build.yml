@@ -43,8 +43,11 @@ jobs:
             **/build/test-results/
 
   # Real YouTube: resolve, download and merge a Creative-Commons video, check the MP4 with ffprobe.
-  # Informational - YouTube may bot-check datacenter IPs - so it can't turn the build red.
+  # Manual only ("Run workflow"): in Nov 2026 YouTube answered every GitHub runner with "Sign in to
+  # confirm you're not a bot", so on push it would only ever be red. Run the same tests from a home
+  # network instead: LIVE_YOUTUBE=1 ./gradlew :engine-newpipe:test --tests '*Live*'
   live-youtube:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     continue-on-error: true
     permissions:

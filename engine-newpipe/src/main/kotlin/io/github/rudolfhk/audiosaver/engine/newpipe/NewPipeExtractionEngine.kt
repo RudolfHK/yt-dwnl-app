@@ -10,6 +10,7 @@ import io.github.rudolfhk.audiosaver.core.engine.CollectionPage
 import io.github.rudolfhk.audiosaver.core.engine.ExtractionEngine
 import io.github.rudolfhk.audiosaver.core.engine.FailureReason
 import io.github.rudolfhk.audiosaver.core.engine.PageToken
+import io.github.rudolfhk.audiosaver.core.engine.RequestVariant
 import io.github.rudolfhk.audiosaver.core.engine.ResolvedAudio
 import io.github.rudolfhk.audiosaver.core.engine.VideoStreamSource
 import io.github.rudolfhk.audiosaver.core.link.CollectionKind
@@ -151,6 +152,7 @@ class NewPipeExtractionEngine(
                 averageBitrate = chosen.averageBitrate.takeIf { it > 0 },
                 contentLength = chosen.itagItem?.contentLength?.takeIf { it > 0 },
                 requestHeaders = mapOf("User-Agent" to OkHttpNewPipeDownloader.USER_AGENT),
+                requestVariants = requestVariantsFor(chosen.content),
             ),
             // Cheap to collect here (same player response); only downloaded if the user wants the video.
             videoStreams = runCatching { extractor.videoOnlyStreams }.getOrDefault(emptyList()).mapNotNull(::toVideoStream),
@@ -218,6 +220,33 @@ class NewPipeExtractionEngine(
             )
         }
 
+        /**
+         * How to ask YouTube's stream servers for a stream's bytes, most preferred first.
+         *
+         * Stream URLs from the visionOS client (all of them with this extractor version) are fetched
+         * by NewPipe's own player with that client's User-Agent, as a POST with a 2-byte body and the
+         * byte range in a `range=` query parameter plus an `rn=` request counter
+         * (YoutubeHttpDataSource in TeamNewPipe/NewPipe). That is tried first; a plain GET with a
+         * Range header (visionOS, then desktop User-Agent) follows in case YouTube refuses it.
+         * The downloader keeps whichever works. See LiveStreamRequestDiagnostic to re-check.
+         */
+        internal fun requestVariantsFor(url: String): List<RequestVariant> {
+            val desktop = RequestVariant("GET, desktop User-Agent", mapOf("User-Agent" to OkHttpNewPipeDownloader.USER_AGENT))
+            if (!YoutubeParsingHelper.isVisionOsStreamingUrl(url)) return listOf(desktop)
+            val visionOs = mapOf("User-Agent" to YoutubeParsingHelper.getVisionOsUserAgent(null))
+            return listOf(
+                RequestVariant(
+                    "NewPipe player style (POST, range parameter, visionOS User-Agent)",
+                    visionOs,
+                    rangeAsQueryParameter = true,
+                    requestNumberParameter = true,
+                    postBody = byteArrayOf(0x78, 0),
+                ),
+                RequestVariant("GET, visionOS User-Agent", visionOs),
+                desktop,
+            )
+        }
+
         /** Video-only MP4 streams the core can merge; quality choice (H.264, height) happens in core. */
         internal fun toVideoStream(stream: VideoStream): VideoStreamSource? {
             if (!stream.isUrl || stream.deliveryMethod != DeliveryMethod.PROGRESSIVE_HTTP || stream.format != MediaFormat.MPEG_4) return null
@@ -233,6 +262,7 @@ class NewPipeExtractionEngine(
                 averageBitrate = stream.bitrate.takeIf { it > 0 },
                 contentLength = stream.itagItem?.contentLength?.takeIf { it > 0 },
                 requestHeaders = mapOf("User-Agent" to OkHttpNewPipeDownloader.USER_AGENT),
+                requestVariants = requestVariantsFor(stream.content),
             )
         }
 

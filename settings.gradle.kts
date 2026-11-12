@@ -18,7 +18,9 @@ dependencyResolutionManagement {
         google {
             content {
                 includeGroupByRegex("com\\.android.*")
-                includeGroupByRegex("com\\.google\\.android.*")
+                // com.google.* rather than com.google.android.*: the instrumented-test runner pulls in
+                // com.google.testing.platform from here too.
+                includeGroupByRegex("com\\.google.*")
                 includeGroupByRegex("androidx.*")
             }
         }

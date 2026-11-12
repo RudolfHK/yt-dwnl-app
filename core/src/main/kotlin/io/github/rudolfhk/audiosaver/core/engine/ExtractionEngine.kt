@@ -77,6 +77,7 @@ data class VideoStreamSource(
     val averageBitrate: Int?,
     override val contentLength: Long?,
     override val requestHeaders: Map<String, String> = emptyMap(),
+    override val requestVariants: List<RequestVariant> = listOf(RequestVariant("default", requestHeaders)),
 ) : RemoteFile
 
 /** Something the downloader can fetch. */
@@ -88,6 +89,30 @@ interface RemoteFile {
 
     /** Extra headers the stream host expects (e.g. a matching User-Agent). */
     val requestHeaders: Map<String, String>
+
+    /**
+     * Ways of asking the stream host for bytes, most preferred first. The downloader moves to the
+     * next one when the host refuses (HTTP 400/401/403) or ignores how the range was asked for,
+     * and keeps using the one that worked.
+     */
+    val requestVariants: List<RequestVariant>
+}
+
+/**
+ * One way of requesting byte ranges. YouTube's stream servers have accepted different styles from
+ * different clients over time, so the engine - which knows the client a URL came from - lists them.
+ */
+class RequestVariant(
+    val name: String,
+    val headers: Map<String, String> = emptyMap(),
+    /** Ask for bytes with a `range=from-to` query parameter instead of a `Range` header. */
+    val rangeAsQueryParameter: Boolean = false,
+    /** Number requests with an `rn=` query parameter, as YouTube's own players do. */
+    val requestNumberParameter: Boolean = false,
+    /** Send a POST with this body instead of a GET. */
+    val postBody: ByteArray? = null,
+) {
+    override fun toString() = name
 }
 
 data class AudioStreamSource(
@@ -97,6 +122,7 @@ data class AudioStreamSource(
     val averageBitrate: Int?,
     override val contentLength: Long?,
     override val requestHeaders: Map<String, String> = emptyMap(),
+    override val requestVariants: List<RequestVariant> = listOf(RequestVariant("default", requestHeaders)),
 ) : RemoteFile
 
 enum class AudioContainer(val extension: String, val mimeType: String, val supportsTagging: Boolean) {

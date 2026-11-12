@@ -4,6 +4,7 @@ import io.github.rudolfhk.audiosaver.core.engine.AudioContainer
 import io.github.rudolfhk.audiosaver.core.engine.AudioSaveException
 import io.github.rudolfhk.audiosaver.core.engine.AudioStreamSource
 import io.github.rudolfhk.audiosaver.core.engine.FailureReason
+import io.github.rudolfhk.audiosaver.core.engine.RequestVariant
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -168,5 +169,79 @@ class HttpAudioDownloaderTest {
             assertFailsWith<CancellationException> { withTimeout(5_000) { job.await() } }
             assertTrue(System.nanoTime() - t0 < TimeUnit.SECONDS.toNanos(3), "cancel took too long")
         }
+    }
+
+    // ---------------------------------------------------------------- request variants
+
+    private val playerStyle = RequestVariant(
+        "player", mapOf("User-Agent" to "visionos-ua"),
+        rangeAsQueryParameter = true, requestNumberParameter = true, postBody = byteArrayOf(0x78, 0),
+    )
+    private val headerStyle = RequestVariant("header", mapOf("User-Agent" to "visionos-ua"))
+    private val requests = Collections.synchronizedList(mutableListOf<RecordedRequest>())
+
+    private fun variantSource(vararg variants: RequestVariant) =
+        source(payload.size.toLong()).copy(requestVariants = variants.toList())
+
+    /** Serves [payload]; [accept] decides per request whether this style is allowed (else 403). */
+    private fun serveVariants(ignoreRangeParameter: Boolean = false, accept: (RecordedRequest) -> Boolean) {
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                requests += request
+                if (!accept(request)) return MockResponse.Builder().code(403).build()
+                val range = request.url.queryParameter("range")?.takeUnless { ignoreRangeParameter }
+                    ?: request.headers["Range"]?.removePrefix("bytes=")
+                if (range == null) return MockResponse.Builder().code(200).body(Buffer().write(payload)).build()
+                val (from, to) = range.split('-').map { it.toInt() }
+                val end = minOf(to, payload.size - 1)
+                val code = if (request.headers["Range"] != null) 206 else 200 // YouTube answers range= with 200
+                return MockResponse.Builder().code(code).body(Buffer().write(payload, from, end - from + 1)).build()
+            }
+        }
+    }
+
+    private fun downloadVariants(vararg variants: RequestVariant): ByteArray {
+        val target = tmp.newFile()
+        runBlocking { downloader.download(variantSource(*variants), target) { _, _ -> } }
+        return target.readBytes()
+    }
+
+    @Test fun `player style - POST, range and rn in the url, its headers`() {
+        serveVariants { it.method == "POST" && it.headers["User-Agent"] == "visionos-ua" && it.url.queryParameter("range") != null }
+        assertContentEquals(payload, downloadVariants(playerStyle, headerStyle))
+        assertTrue(requests.all { it.method == "POST" && it.body?.toByteArray()?.contentEquals(byteArrayOf(0x78, 0)) == true })
+        assertEquals(listOf("0", "1", "2", "3"), requests.map { it.url.queryParameter("rn") })
+        assertEquals(listOf("0-299999", "300000-599999", "600000-899999", "900000-999999"), requests.map { it.url.queryParameter("range") })
+        assertTrue(requests.none { it.headers["Range"] != null })
+    }
+
+    @Test fun `a refused style falls back once and the working one is kept`() {
+        serveVariants { it.method == "GET" && it.headers["Range"] != null }
+        assertContentEquals(payload, downloadVariants(playerStyle, headerStyle))
+        assertEquals(1 + 4, requests.size, "one refusal, then 4 chunks without trying the refused style again")
+        assertEquals("POST", requests.first().method)
+        assertTrue(requests.drop(1).all { it.method == "GET" })
+    }
+
+    @Test fun `a host ignoring the range parameter is detected instead of writing wrong bytes`() {
+        serveVariants(ignoreRangeParameter = true) { true }
+        assertContentEquals(payload, downloadVariants(playerStyle, headerStyle))
+        assertTrue(requests.drop(1).all { it.headers["Range"] != null }, "switched to the Range header")
+    }
+
+    @Test fun `refused by every style says which were tried`() {
+        serveVariants { false }
+        val e = assertFailsWith<AudioSaveException> { downloadVariants(playerStyle, headerStyle) }
+        assertEquals(FailureReason.DOWNLOAD_FAILED, e.reason)
+        assertTrue(e.detail.contains("403") && e.detail.contains("tried: player, header"), e.detail)
+        assertEquals(2, requests.size)
+    }
+
+    @Test fun `unknown size also falls back`() {
+        serveVariants { it.method == "GET" }
+        val target = tmp.newFile()
+        runBlocking { downloader.download(variantSource(playerStyle, headerStyle).copy(contentLength = null), target) { _, _ -> } }
+        assertContentEquals(payload, target.readBytes())
+        assertEquals(2, requests.size)
     }
 }

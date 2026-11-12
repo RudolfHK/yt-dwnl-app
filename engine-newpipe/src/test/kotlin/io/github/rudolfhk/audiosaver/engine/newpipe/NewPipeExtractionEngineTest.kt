@@ -154,4 +154,20 @@ class NewPipeExtractionEngineTest {
         assertNull(mapped.contentLength)
         assertNull(NewPipeExtractionEngine.toVideoStream(video(MediaFormat.MPEG_4, resolution = "", withItag = false)), "no size at all")
     }
+
+    @Test fun `visionOS stream urls are fetched like NewPipe's player first, with fallbacks`() {
+        val visionOs = "https://rr1---sn-abc.googlevideo.com/videoplayback?expire=1&itag=137&c=VISIONOS&n=x"
+        val variants = NewPipeExtractionEngine.requestVariantsFor(visionOs)
+        assertEquals(3, variants.size)
+        val first = variants.first()
+        assertTrue(first.rangeAsQueryParameter && first.requestNumberParameter)
+        assertTrue(first.postBody!!.contentEquals(byteArrayOf(0x78, 0)))
+        assertTrue(first.headers["User-Agent"]!!.startsWith("com.google.visionos.youtube/"), first.headers.toString())
+        assertTrue(variants[1].headers["User-Agent"]!!.startsWith("com.google.visionos.youtube/") && !variants[1].rangeAsQueryParameter)
+        assertEquals(OkHttpNewPipeDownloader.USER_AGENT, variants.last().headers["User-Agent"])
+
+        val other = NewPipeExtractionEngine.requestVariantsFor("https://rr1---sn-abc.googlevideo.com/videoplayback?itag=140&c=WEB")
+        assertEquals(1, other.size)
+        assertEquals(OkHttpNewPipeDownloader.USER_AGENT, other.single().headers["User-Agent"])
+    }
 }
