@@ -90,6 +90,46 @@ class LiveYouTubeTest {
         val video = assertIs<VideoResult.Saved>(done.video, "video: ${done.video}")
         println("Video: ${video.width}x${video.height}@${video.fps}, ${video.saved.sizeBytes} bytes")
         assertTrue(video.height in 240..480)
-        assertTrue(File(File(out, "video"), video.saved.displayName).length() > 1_000_000)
+        val mp4 = File(File(out, "video"), video.saved.displayName)
+        assertTrue(mp4.length() > 1_000_000)
+        checkWithFfprobe(mp4, expectedSeconds = 635.0)
+        keepForInspection(mp4, File(out, done.saved!!.displayName))
+    }
+
+    @Test fun `video only saves a playable mp4 and no audio file`() = runBlocking {
+        val out = File(tmp.root, "Music")
+        val states = mutableListOf<DownloadState>()
+        AudioDownloadPipeline(engine, HttpAudioDownloader(client), DirectoryAudioSink(out), File(tmp.root, "work"))
+            .run(creativeCommonsVideo, options = DownloadOptions.videoOnly(VideoQuality.P360)) { states += it }
+        val done = assertIs<DownloadState.Done>(states.last(), "ended in ${states.last()}")
+        assertEquals(null, done.saved)
+        val video = assertIs<VideoResult.Saved>(done.video)
+        checkWithFfprobe(File(File(out, "video"), video.saved.displayName), expectedSeconds = 635.0)
+        assertTrue(out.listFiles()!!.none { it.isFile }, "no audio file expected")
+    }
+
+    /** Independent check of the real YouTube result (skipped where ffprobe isn't installed). */
+    private fun checkWithFfprobe(mp4: File, expectedSeconds: Double) {
+        fun run(vararg cmd: String) = runCatching {
+            val p = ProcessBuilder(*cmd).redirectErrorStream(true).start()
+            val text = p.inputStream.bufferedReader().readText()
+            p.waitFor()
+            p.exitValue() to text
+        }.getOrNull()
+        val probe = run("ffprobe", "-v", "error", "-show_entries", "stream=codec_name,width,height:format=duration", "-of", "default=noprint_wrappers=1", mp4.path)
+            ?: return println("ffprobe not installed - skipping the independent check")
+        println("ffprobe: ${probe.second}")
+        assertEquals(0, probe.first, probe.second)
+        assertTrue(probe.second.contains("codec_name=h264") && probe.second.contains("codec_name=aac"), probe.second)
+        val duration = Regex("duration=([0-9.]+)").find(probe.second)!!.groupValues[1].toDouble()
+        assertTrue(kotlin.math.abs(duration - expectedSeconds) < 5, "duration $duration, expected ~$expectedSeconds")
+        val decode = run("ffmpeg", "-v", "error", "-i", mp4.path, "-f", "null", "-")!!
+        assertEquals("", decode.second.trim(), "decoder errors in the real merged file")
+    }
+
+    private fun keepForInspection(vararg files: File) {
+        val dir = System.getenv("LIVE_OUTPUT_DIR")?.let(::File) ?: return
+        dir.mkdirs()
+        files.forEach { it.copyTo(File(dir, it.name), overwrite = true) }
     }
 }

@@ -26,6 +26,7 @@ configure<ApplicationExtension> {
         targetSdk {
             version = release(37)
         }
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         versionCode = 1
         versionName = "1.0"
     }
@@ -74,4 +75,7 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.tooling)
 
     coreLibraryDesugaring(libs.android.desugar)
+
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.junit)
 }

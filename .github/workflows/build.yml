@@ -41,3 +41,72 @@ jobs:
           path: |
             **/build/reports/
             **/build/test-results/
+
+  # Real YouTube: resolve, download and merge a Creative-Commons video, check the MP4 with ffprobe.
+  # Informational - YouTube may bot-check datacenter IPs - so it can't turn the build red.
+  live-youtube:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+      - name: Set up JDK
+        uses: actions/setup-java@v5
+        with:
+          java-version: 21
+          distribution: temurin
+          cache: gradle
+      - name: Install ffmpeg
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+      - name: Live YouTube tests
+        env:
+          LIVE_YOUTUBE: "1"
+          LIVE_OUTPUT_DIR: ${{ github.workspace }}/live-output
+        run: ./gradlew :engine-newpipe:test --tests '*Live*' --info --stacktrace
+      - name: Upload live results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: live-youtube-results
+          path: |
+            live-output/
+            engine-newpipe/build/reports/tests/
+            engine-newpipe/build/test-results/
+
+  # A real Android system: merge, save through MediaStore and read back the way the phone does.
+  android-device:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        api-level: [29, 35]
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Set up JDK
+        uses: actions/setup-java@v5
+        with:
+          java-version: 21
+          distribution: temurin
+          cache: gradle
+      - name: Instrumented tests on an emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ matrix.api-level }}
+          target: default
+          arch: x86_64
+          script: ./gradlew :app:connectedDebugAndroidTest --stacktrace
+      - name: Upload device test report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-device-report-api${{ matrix.api-level }}
+          path: app/build/reports/androidTests/connected/**
