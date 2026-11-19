@@ -76,4 +76,18 @@ class CollectionListingTest {
         assertEquals(3, batch.entries.size)
         assertTrue(batch.entries.all { it.context.album == null && it.context.trackNumber == null && it.context.subfolder == null })
     }
+
+    @Test fun `only new songs - songs saved before start unticked, also after load more`() {
+        val saved = setOf(id(2), id(4), id(30))
+        val listing = CollectionListing.of(page(1..5), saved)
+        assertEquals(setOf(id(1), id(3), id(5)), listing.selected)
+        assertEquals(2, listing.savedBeforeCount)
+        assertTrue(listing.wasSavedBefore(id(2)))
+        assertTrue(id(2) in listing.toggle(id(2)).selected, "can still be ticked by hand")
+        assertEquals(5, listing.selectAll().selectedCount)
+        val more = listing.appending(page(26..35))
+        assertFalse(id(30) in more.selected)
+        assertTrue(id(31) in more.selected)
+        assertEquals(listOf(id(1), id(3), id(5)), more.toBatchRequest().entries.take(3).map { it.item.videoId })
+    }
 }

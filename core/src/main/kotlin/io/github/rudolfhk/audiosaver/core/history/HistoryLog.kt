@@ -53,6 +53,10 @@ class HistoryLog(private val file: File, private val maxEntries: Int = 1000) {
     fun lastSaved(videoId: String): HistoryEntry? =
         _entries.value.firstOrNull { it.videoId == videoId && it.status != HistoryStatus.FAILED }
 
+    /** Every video with a saved audio file in the history, for "only new songs". */
+    fun savedAudioIds(): Set<String> =
+        _entries.value.filter { it.audio?.saved != null }.mapTo(HashSet()) { it.videoId }
+
     private suspend fun ensureLoaded() {
         if (loaded) return
         val lines = withContext(Dispatchers.IO) { if (file.exists()) file.readLines() else emptyList() }

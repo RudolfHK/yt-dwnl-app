@@ -1,6 +1,7 @@
 package io.github.rudolfhk.audiosaver.core.pipeline
 
 import io.github.rudolfhk.audiosaver.core.audio.PcmDecoder
+import io.github.rudolfhk.audiosaver.core.download.HttpAudioDownloader
 import io.github.rudolfhk.audiosaver.core.audio.TimeRange
 import io.github.rudolfhk.audiosaver.core.tag.CoverArt
 import io.github.rudolfhk.audiosaver.core.tag.TrackMetadata
@@ -28,7 +29,11 @@ data class Processing(
     val trim: TimeRange = TimeRange.ALL,
     /** Ask the user to confirm/edit the tags; single downloads only. */
     val reviewTags: Boolean = false,
+    /** Fetch big video files over several connections (falls back to one if YouTube objects). */
+    val parallelChunks: Boolean = false,
 ) {
+    val videoConnections: Int get() = if (parallelChunks) HttpAudioDownloader.MAX_CONNECTIONS else 1
+
     /** These need the audio decoded once more on the phone. */
     val needsAnalysis: Boolean get() = replayGain || trimSilence
 }

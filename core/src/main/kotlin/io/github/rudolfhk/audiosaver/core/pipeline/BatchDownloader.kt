@@ -1,5 +1,6 @@
 package io.github.rudolfhk.audiosaver.core.pipeline
 
+import io.github.rudolfhk.audiosaver.core.audio.TimeRange
 import io.github.rudolfhk.audiosaver.core.engine.CollectionItem
 import io.github.rudolfhk.audiosaver.core.engine.FailureReason
 import io.github.rudolfhk.audiosaver.core.link.CollectionKind
@@ -88,7 +89,12 @@ class BatchDownloader(
     private val pauseBetweenItemsMs: Long = 1_000,
 ) {
 
-    suspend fun run(request: BatchRequest, onState: (BatchState) -> Unit) {
+    /**
+     * [processing] applies to every song (format, cover, titles, loudness, silence trim). The manual
+     * cut and the tag dialog are per-song decisions, so batches never use them.
+     */
+    suspend fun run(request: BatchRequest, processing: Processing = Processing(), onState: (BatchState) -> Unit) {
+        val options = DownloadOptions(processing = forBatch(processing))
         val items = request.entries.map { BatchItemState(it, ItemStatus.Queued) }.toMutableList()
         fun emit(finished: Boolean = false) = onState(BatchState(request.title, request.kind, items.toList(), finished))
 
@@ -105,7 +111,7 @@ class BatchDownloader(
 
                 val entry = items[index].entry
                 var last: DownloadState = DownloadState.Idle
-                pipeline.run(entry.item.videoId, entry.context) { state ->
+                pipeline.run(entry.item.videoId, entry.context, options) { state ->
                     last = state
                     items[index] = items[index].copy(status = ItemStatus.Active(state))
                     emit()
@@ -139,6 +145,8 @@ class BatchDownloader(
     }
 
     companion object {
+        fun forBatch(processing: Processing) = processing.copy(trim = TimeRange.ALL, reviewTags = false)
+
         val STOP_BATCH_REASONS = setOf(FailureReason.RATE_LIMITED, FailureReason.BOT_CHECK)
     }
 }

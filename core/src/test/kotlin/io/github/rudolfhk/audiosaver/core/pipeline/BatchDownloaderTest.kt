@@ -162,4 +162,14 @@ class BatchDownloaderTest {
         assertEquals(2, retry.entries.single().context.trackNumber)
         assertEquals("Band", retry.entries.single().context.albumArtist)
     }
+
+    @Test fun `processing settings reach every song, manual trim and tag review don't`() {
+        val processing = Processing(audioFormat = AudioFormat.OPUS, trim = io.github.rudolfhk.audiosaver.core.audio.TimeRange(0, 100), reviewTags = true)
+        assertEquals(Processing(audioFormat = AudioFormat.OPUS), BatchDownloader.forBatch(processing))
+        runBlocking { downloader().run(mix("aaaaaaaaaaa", "bbbbbbbbbbb"), processing) { states += it } }
+        val final = states.last()
+        assertEquals(2, final.savedCount)
+        // The fake engine has no Opus stream: the format setting arrived and fell back per song.
+        assertTrue(final.items.all { (it.status as ItemStatus.Saved).warning!!.contains("no Opus stream") })
+    }
 }

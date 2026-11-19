@@ -244,4 +244,99 @@ class HttpAudioDownloaderTest {
         assertContentEquals(payload, target.readBytes())
         assertEquals(2, requests.size)
     }
+
+    // ---------------------------------------------------------------- parallel chunks
+
+    private val smallChunks = HttpAudioDownloader(client, chunkSize = 100_000)
+    private val inFlight = java.util.concurrent.atomic.AtomicInteger()
+    private val maxInFlight = java.util.concurrent.atomic.AtomicInteger()
+    private val concurrencyAfter429 = java.util.concurrent.atomic.AtomicInteger()
+
+    /** Like [serve], but each answer takes a moment so overlapping requests can be counted. */
+    private fun serveSlowly(override: (requestNumber: Int, range: String?) -> MockResponse? = { _, _ -> null }) {
+        serve { n, range ->
+            val now = inFlight.incrementAndGet()
+            maxInFlight.accumulateAndGet(now) { a, b -> maxOf(a, b) }
+            try {
+                Thread.sleep(60)
+                override(n, range)
+            } finally {
+                inFlight.decrementAndGet()
+            }
+        }
+    }
+
+    private fun downloadParallel(source: AudioStreamSource = source(payload.size.toLong()), connections: Int = 3): ByteArray {
+        val target = tmp.newFile()
+        runBlocking { smallChunks.download(source, target, connections) { d, t -> progress += d to t } }
+        return target.readBytes()
+    }
+
+    @Test fun `parallel chunks give the same bytes over up to three connections`() {
+        serveSlowly()
+        assertContentEquals(payload, downloadParallel(connections = 8))
+        assertEquals(10, ranges.size, "each chunk fetched once: $ranges")
+        assertEquals(3, maxInFlight.get(), "capped at three connections")
+        assertEquals("bytes=0-99999", ranges.first(), "first chunk alone, to settle the request style")
+        assertTrue(progress.zipWithNext().all { (a, b) -> b.first >= a.first }, "progress never goes backwards")
+        assertEquals(payload.size.toLong() to payload.size.toLong(), progress.last())
+    }
+
+    @Test fun `one connection is the default`() {
+        serveSlowly()
+        assertContentEquals(payload, run { val t = tmp.newFile(); runBlocking { smallChunks.download(source(payload.size.toLong()), t) { _, _ -> } }; t.readBytes() })
+        assertEquals(1, maxInFlight.get())
+    }
+
+    @Test fun `http 429 while parallel drops back to one connection and still finishes`() {
+        val limited = java.util.concurrent.atomic.AtomicBoolean(false)
+        serveSlowly { n, _ ->
+            if (limited.get()) concurrencyAfter429.accumulateAndGet(inFlight.get()) { a, b -> maxOf(a, b) }
+            if (n == 3) {
+                limited.set(true)
+                MockResponse.Builder().code(429).build()
+            } else {
+                null
+            }
+        }
+        assertContentEquals(payload, downloadParallel())
+        assertTrue(maxInFlight.get() > 1)
+        // Requests already in flight finish; once they have, everything runs one at a time.
+        val tail = ranges.takeLast(4)
+        assertEquals(tail.size, tail.toSet().size, "no chunk fetched twice at the end: $ranges")
+        assertTrue(concurrencyAfter429.get() <= 3)
+    }
+
+    @Test fun `http 429 with one connection left is still a rate-limit failure`() {
+        serveSlowly { n, _ -> if (n >= 1) MockResponse.Builder().code(429).build() else null }
+        val e = assertFailsWith<AudioSaveException> { downloadParallel() }
+        assertEquals(FailureReason.RATE_LIMITED, e.reason)
+    }
+
+    @Test fun `a host ignoring Range falls back to the sequential download`() {
+        serve { _, _ -> MockResponse.Builder().code(200).body(Buffer().write(payload)).build() }
+        assertContentEquals(payload, downloadParallel())
+    }
+
+    @Test fun `parallel works with the player request style`() {
+        serveVariants { it.method == "POST" }
+        val target = tmp.newFile()
+        runBlocking { smallChunks.download(variantSource(playerStyle), target, 3) { _, _ -> } }
+        assertContentEquals(payload, target.readBytes())
+        val rn = requests.map { it.url.queryParameter("rn")!!.toInt() }
+        assertEquals(rn.size, rn.toSet().size, "request numbers stay unique across connections")
+    }
+
+    @Test fun `a refusal after the first chunk moves every connection to the next style once`() {
+        val refused = java.util.concurrent.atomic.AtomicInteger()
+        serveVariants { r ->
+            val isPlayer = r.method == "POST"
+            // The player style works for the first chunk, then the host starts refusing it.
+            if (isPlayer && requests.count { it.method == "POST" } > 1) { refused.incrementAndGet(); false } else true
+        }
+        val target = tmp.newFile()
+        runBlocking { smallChunks.download(variantSource(playerStyle, headerStyle), target, 3) { _, _ -> } }
+        assertContentEquals(payload, target.readBytes())
+        assertTrue(refused.get() in 1..3, "each connection hits the refusal at most once: ${refused.get()}")
+    }
 }

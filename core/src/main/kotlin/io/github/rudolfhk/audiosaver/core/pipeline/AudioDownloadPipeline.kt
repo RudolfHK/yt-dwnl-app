@@ -218,7 +218,7 @@ class AudioDownloadPipeline(
                     )
                 }
                 val first = progress(0)
-                downloader.download(fileSource, raw, first::report)
+                downloader.download(fileSource, raw, listener = first::report)
                 first.flush()
                 var downloaded = raw.length()
 
@@ -249,7 +249,7 @@ class AudioDownloadPipeline(
                     videoResult = try {
                         val audioForVideo = if (separateMuxAudio) {
                             val p = progress(downloaded)
-                            downloader.download(audio.stream, muxAudio, p::report)
+                            downloader.download(audio.stream, muxAudio, listener = p::report)
                             p.flush()
                             downloaded += muxAudio.length()
                             muxAudio
@@ -257,7 +257,7 @@ class AudioDownloadPipeline(
                             raw
                         }
                         val videoProgress = progress(downloaded)
-                        downloader.download(video, rawVideo, videoProgress::report)
+                        downloader.download(video, rawVideo, processing.videoConnections, videoProgress::report)
                         videoProgress.flush()
                         onState(DownloadState.Merging(videoId, metadata.title))
                         saveVideo(metadata.copy(replayGain = null), video, audioForVideo, rawVideo, merged, taggedVideo)

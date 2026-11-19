@@ -8,6 +8,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.Call
 import okhttp3.HttpUrl.Companion.toHttpUrl
@@ -36,7 +37,30 @@ class HttpAudioDownloader(
     private val maxAttemptsPerChunk: Int = 3,
 ) {
 
-    suspend fun download(source: RemoteFile, target: File, listener: DownloadProgressListener): Long =
+    /**
+     * [connections] > 1 fetches chunks over that many parallel connections (big video files). The
+     * first chunk is always fetched alone, to find the request style the host accepts; if the host
+     * then rate-limits (HTTP 429) the download drops back to one connection instead of failing.
+     */
+    suspend fun download(
+        source: RemoteFile,
+        target: File,
+        connections: Int = 1,
+        listener: DownloadProgressListener,
+    ): Long = withContext(Dispatchers.IO) {
+        val known = source.contentLength?.takeIf { it > 0 }
+        if (connections > 1 && known != null && known > chunkSize * 2) {
+            val variants = Variants(source)
+            try {
+                return@withContext ParallelDownload(source, variants, known, target, listener, minOf(connections, MAX_CONNECTIONS)).run()
+            } catch (_: RangesNotHonoured) {
+                // Host sends whole files only: the sequential path knows how to take that.
+            }
+        }
+        downloadSequential(source, target, listener)
+    }
+
+    private suspend fun downloadSequential(source: RemoteFile, target: File, listener: DownloadProgressListener): Long =
         withContext(Dispatchers.IO) {
             target.outputStream().buffered(BUFFER_SIZE).use { out ->
                 val known = source.contentLength?.takeIf { it > 0 }
@@ -78,10 +102,16 @@ class HttpAudioDownloader(
         val current: RequestVariant get() = all[index]
         val tried: String get() = all.take(index + 1).joinToString { it.name }
 
-        /** Moves to the next variant; false when there is none left. */
-        fun next(): Boolean = (index + 1 < all.size).also { if (it) index++ }
+        /**
+         * Moves past [failed] (the variant the refused request used); false when there is none
+         * left. Parallel connections may report the same refusal - only the first one moves on.
+         */
+        @Synchronized fun next(failed: RequestVariant = current): Boolean {
+            if (failed !== all[index]) return true
+            return (index + 1 < all.size).also { if (it) index++ }
+        }
 
-        fun nextRequestNumber() = requestNumber++
+        @Synchronized fun nextRequestNumber() = requestNumber++
     }
 
     /** The host refused this way of asking (or ignored the range): try the next variant. */
@@ -129,7 +159,7 @@ class HttpAudioDownloader(
                 if (done == from) throw IOException("Empty response for bytes $from-$end")
                 failuresInARow = 0
             } catch (e: VariantRejected) {
-                if (!variants.next()) throw refusedByAll(e.failure, variants)
+                if (!variants.next(variant)) throw refusedByAll(e.failure, variants)
             } catch (e: IOException) {
                 currentCoroutineContext().ensureActive()
                 // Bytes already written stay written; the next attempt resumes from `done`.
@@ -163,6 +193,122 @@ class HttpAudioDownloader(
                 currentCoroutineContext().ensureActive()
                 throw networkFailure(e)
             }
+        }
+    }
+
+    /** A plain 200 to a Range request: parallel chunks are impossible with this host. */
+    private class RangesNotHonoured : IOException("Host ignores Range requests")
+
+    /** Rate-limited while several connections were open: worth retrying with one. */
+    private class TooManyConnections : IOException("HTTP 429 with parallel connections")
+
+    /**
+     * Chunks are handed out from a queue to [lanes] workers, each writing straight to its offset in
+     * the file. Lane 0 never stops while chunks remain; the others stop picking up new chunks once
+     * the host has rate-limited the download, so it carries on with one connection.
+     */
+    private inner class ParallelDownload(
+        private val source: RemoteFile,
+        private val variants: Variants,
+        private val total: Long,
+        private val target: File,
+        private val listener: DownloadProgressListener,
+        private val lanes: Int,
+    ) {
+        private val queue = java.util.concurrent.ConcurrentLinkedQueue<LongRange>()
+        private val received = java.util.concurrent.atomic.AtomicLong()
+        private val activeLanes = java.util.concurrent.atomic.AtomicInteger(lanes)
+        private val progressLock = Any()
+
+        suspend fun run(): Long {
+            var from = 0L
+            while (from < total) {
+                val end = minOf(from + chunkSize, total) - 1
+                queue += from..end
+                from = end + 1
+            }
+            java.io.RandomAccessFile(target, "rw").use { file ->
+                file.setLength(0)
+                val channel = file.channel
+                report()
+                fetch(channel, queue.poll()!!, lane = 0, firstChunk = true)
+                kotlinx.coroutines.coroutineScope {
+                    repeat(lanes) { lane ->
+                        launch {
+                            while (lane < activeLanes.get()) {
+                                val range = queue.poll() ?: break
+                                fetch(channel, range, lane, firstChunk = false)
+                            }
+                        }
+                    }
+                }
+                // Chunks handed back by lanes that stopped after a 429.
+                while (true) fetch(channel, queue.poll() ?: break, lane = 0, firstChunk = false)
+                channel.force(false)
+            }
+            val done = received.get()
+            if (done != total) throw AudioSaveException(FailureReason.DOWNLOAD_FAILED, "Received $done of $total bytes")
+            return done
+        }
+
+        private fun report() = synchronized(progressLock) { listener.onProgress(received.get(), total) }
+
+        private suspend fun fetch(channel: java.nio.channels.FileChannel, range: LongRange, lane: Int, firstChunk: Boolean) {
+            var pos = range.first
+            var failuresInARow = 0
+            while (pos <= range.last) {
+                val variant = variants.current
+                val from = pos
+                try {
+                    execute(request(source, variant, variants, from, range.last)) { code, body ->
+                        val expected = range.last - from + 1
+                        when {
+                            code == 206 -> Unit
+                            code == 200 && variant.rangeAsQueryParameter ->
+                                if (body.contentLength > 0 && body.contentLength != expected) {
+                                    throw VariantRejected(AudioSaveException(FailureReason.DOWNLOAD_FAILED, "Stream host ignored the range parameter"))
+                                }
+                            code == 200 -> throw RangesNotHonoured()
+                            code == 429 && activeLanes.get() > 1 -> throw TooManyConnections()
+                            code in REJECTED -> throw VariantRejected(httpFailure(code))
+                            else -> throw httpFailure(code)
+                        }
+                        copy(body, PositionalOutput(channel, from), expected) { copied ->
+                            received.addAndGet(from + copied - pos)
+                            pos = from + copied
+                            report()
+                        }
+                    }
+                    if (pos == from) throw IOException("Empty response for bytes $from-${range.last}")
+                    failuresInARow = 0
+                } catch (e: RangesNotHonoured) {
+                    if (firstChunk) throw e
+                    throw AudioSaveException(FailureReason.DOWNLOAD_FAILED, "Server stopped honouring Range requests")
+                } catch (e: TooManyConnections) {
+                    activeLanes.set(1)
+                    delay(RETRY_DELAY_MS)
+                } catch (e: VariantRejected) {
+                    if (!variants.next(variant)) throw refusedByAll(e.failure, variants)
+                } catch (e: IOException) {
+                    currentCoroutineContext().ensureActive()
+                    if (++failuresInARow >= maxAttemptsPerChunk) throw networkFailure(e)
+                    delay(RETRY_DELAY_MS * failuresInARow)
+                }
+                // A lane told to stop hands the rest of its chunk back to lane 0.
+                if (pos <= range.last && lane >= activeLanes.get()) {
+                    queue += pos..range.last
+                    return
+                }
+            }
+        }
+    }
+
+    /** Writes at a fixed place in a file; FileChannel positional writes are safe from several threads. */
+    private class PositionalOutput(private val channel: java.nio.channels.FileChannel, private var position: Long) : OutputStream() {
+        override fun write(b: Int) = write(byteArrayOf(b.toByte()), 0, 1)
+        override fun write(b: ByteArray, off: Int, len: Int) {
+            val buffer = java.nio.ByteBuffer.wrap(b, off, len)
+            while (buffer.hasRemaining()) position += channel.write(buffer, position)
         }
     }
 
@@ -232,6 +378,9 @@ class HttpAudioDownloader(
         /** Answers that mean "not like this" rather than "not at all": worth trying the next variant. */
         private val REJECTED = setOf(400, 401, 403)
         private const val BUFFER_SIZE = 64 * 1024
+
+        /** More than this rarely helps and only invites rate limiting. */
+        const val MAX_CONNECTIONS = 3
         private const val RETRY_DELAY_MS = 750L
     }
 }

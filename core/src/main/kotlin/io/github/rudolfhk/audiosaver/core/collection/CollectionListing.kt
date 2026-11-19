@@ -13,7 +13,9 @@ import io.github.rudolfhk.audiosaver.core.pipeline.BatchRequest
  * every change returns a new listing, so it can sit directly in UI state.
  *
  * Everything selectable starts ticked - the user opened the link to get the songs - and songs added
- * by "Load more" are ticked as well. Mixes are endless, so loading stops at [MAX_ITEMS].
+ * by "Load more" are ticked as well, except songs in [savedBefore] ("only new songs": re-opening a
+ * playlist preselects just what's new). They stay in the list and can still be ticked by hand.
+ * Mixes are endless, so loading stops at [MAX_ITEMS].
  */
 data class CollectionListing(
     val ref: CollectionRef,
@@ -23,12 +25,19 @@ data class CollectionListing(
     val selected: Set<VideoId>,
     val totalCount: Long?,
     val next: PageToken?,
+    /** Songs the history says were saved before; not preselected. */
+    val savedBefore: Set<VideoId> = emptySet(),
 ) {
     val kind: CollectionKind get() = ref.kind
     val canLoadMore: Boolean get() = next != null && items.size < MAX_ITEMS
     val selectableCount: Int get() = items.count { it.available }
     val selectedCount: Int get() = selected.size
     val allSelected: Boolean get() = selectedCount == selectableCount
+
+    /** How many listed songs were saved before, for "4 already saved" next to the title. */
+    val savedBeforeCount: Int get() = items.count { it.available && it.videoId in savedBefore }
+
+    fun wasSavedBefore(id: VideoId): Boolean = id in savedBefore
 
     fun toggle(id: VideoId): CollectionListing {
         if (items.none { it.videoId == id && it.available }) return this
@@ -45,7 +54,7 @@ data class CollectionListing(
         val reachedCap = items.size + fresh.size >= MAX_ITEMS
         return copy(
             items = items + fresh,
-            selected = selected + selectableIds(fresh),
+            selected = selected + (selectableIds(fresh) - savedBefore),
             // A page with nothing new means the mix is looping: stop offering "Load more".
             next = if (fresh.isEmpty() || reachedCap) null else page.next,
             totalCount = page.totalCount ?: totalCount,
@@ -64,8 +73,9 @@ data class CollectionListing(
     companion object {
         const val MAX_ITEMS = 200
 
-        fun of(page: CollectionPage): CollectionListing =
-            CollectionListing(page.ref, page.title, page.uploader, emptyList(), emptySet(), page.totalCount, null)
+        /** [savedBefore] empty = preselect everything ("only new songs" off). */
+        fun of(page: CollectionPage, savedBefore: Set<VideoId> = emptySet()): CollectionListing =
+            CollectionListing(page.ref, page.title, page.uploader, emptyList(), emptySet(), page.totalCount, null, savedBefore)
                 .appending(page)
 
         private fun selectableIds(items: List<CollectionItem>): Set<VideoId> =
