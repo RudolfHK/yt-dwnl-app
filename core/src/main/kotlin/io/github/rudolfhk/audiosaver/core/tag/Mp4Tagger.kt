@@ -1,5 +1,6 @@
 package io.github.rudolfhk.audiosaver.core.tag
 
+import io.github.rudolfhk.audiosaver.core.audio.ReplayGain
 import java.io.BufferedOutputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -19,12 +20,22 @@ data class TrackMetadata(
     val albumArtist: String? = null,
     val trackNumber: Int? = null,
     val trackTotal: Int? = null,
+    /** Square front cover, already cropped and JPEG-encoded. */
+    val cover: CoverArt? = null,
+    /** Loudness to write as ReplayGain/R128 tags, if it was measured. */
+    val replayGain: ReplayGain? = null,
 )
+
+/** A JPEG front cover. */
+class CoverArt(val jpeg: ByteArray, val width: Int, val height: Int) {
+    override fun toString() = "CoverArt(${width}x$height, ${jpeg.size} bytes)"
+}
 
 class TaggingException(message: String) : IOException(message)
 
 /**
- * Embeds iTunes-style metadata (title, artist, album artist, album, year, comment, track number) (`moov/udta/meta/ilst`) into an MP4/M4A audio file, which is what
+ * Embeds iTunes-style metadata (title, artist, album artist, album, year, comment, track number,
+ * cover art, ReplayGain) (`moov/udta/meta/ilst`) into an MP4/M4A audio file, which is what
  * Android's MediaStore scanner, Navidrome/TagLib, foobar2000, iTunes etc. read for M4A. (ID3 is the
  * MP3 equivalent and is not read from MP4 files.)
  *
@@ -179,6 +190,21 @@ object Mp4Tagger {
             val total = metadata.trackTotal?.takeIf { it in track..0xFFFF } ?: 0
             val payload = ByteBuffer.allocate(8).putShort(0).putShort(track.toShort()).putShort(total.toShort()).putShort(0).array()
             items.write(box("trkn", box("data", ByteArray(8) + payload)))
+        }
+        metadata.cover?.let { cover ->
+            // covr: data type 13 = JPEG
+            items.write(box("covr", box("data", byteArrayOf(0, 0, 0, 13) + ByteArray(4) + cover.jpeg)))
+        }
+        metadata.replayGain?.let { rg ->
+            // Freeform "----" atoms (mean = com.apple.iTunes), as foobar2000, TagLib and others write them.
+            fun freeform(name: String, value: String) {
+                val mean = box("mean", ByteArray(4) + "com.apple.iTunes".latin1())
+                val nameBox = box("name", ByteArray(4) + name.latin1())
+                val data = box("data", byteArrayOf(0, 0, 0, 1) + ByteArray(4) + value.toByteArray(Charsets.UTF_8))
+                items.write(box("----", mean + nameBox + data))
+            }
+            freeform("REPLAYGAIN_TRACK_GAIN", rg.gainTag)
+            freeform("REPLAYGAIN_TRACK_PEAK", rg.peakTag)
         }
         val ilst = box("ilst", items.toByteArray())
         return box("meta", ByteArray(4) + hdlr + ilst)

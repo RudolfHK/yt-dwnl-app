@@ -144,6 +144,26 @@ class Mp4TaggerTest {
         assertEquals(null, tags["track"])
     }
 
+    @Test fun `cover art and replaygain`() {
+        val input = fixture("cover.m4a", "-f", "mp4", "-movflags", "+dash+global_sidx", "-frag_duration", "1000000", "-brand", "dash")
+        val jpg = File(tmp.root, "c.jpg")
+        check(run("ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=300x300", "-frames:v", "1", jpg.absolutePath).first == 0)
+        val output = File(tmp.root, "cover-tagged.m4a")
+        Mp4Tagger.tag(
+            input, output,
+            metadata.copy(
+                cover = CoverArt(jpg.readBytes(), 300, 300),
+                replayGain = io.github.rudolfhk.audiosaver.core.audio.ReplayGain(loudnessLufs = -11.25, peak = 0.95),
+            ),
+        )
+        val tags = probeTags(output)
+        assertEquals("-6.75 dB", tags["replaygain_track_gain"], "$tags")
+        assertEquals("0.950000", tags["replaygain_track_peak"])
+        val (_, streams) = run("ffprobe", "-v", "error", "-show_entries", "stream=codec_name,width,height:stream_disposition=attached_pic", "-of", "compact", output.absolutePath)
+        assertTrue(streams.contains("codec_name=mjpeg") && streams.contains("width=300") && streams.contains("attached_pic=1"), streams)
+        assertEquals(decodedMd5(input), decodedMd5(output))
+    }
+
     @Test fun `non mp4 input is rejected cleanly`() {
         val junk = tmp.newFile("junk.m4a").apply { writeText("<html>403 Forbidden</html>") }
         assertFailsWith<TaggingException> { Mp4Tagger.tag(junk, File(tmp.root, "out.m4a"), metadata) }

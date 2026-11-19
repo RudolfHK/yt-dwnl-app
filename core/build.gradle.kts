@@ -16,6 +16,8 @@ dependencies {
     api(libs.kotlinx.coroutines.core)
     api(libs.okhttp)
     implementation(libs.kotlinx.serialization.json)
+    // LAME, pure-Java port (LGPL-2.1+): MP3 export without native code.
+    implementation(libs.jump3r)
 
     testImplementation(libs.kotlin.test)
     testImplementation(libs.junit)

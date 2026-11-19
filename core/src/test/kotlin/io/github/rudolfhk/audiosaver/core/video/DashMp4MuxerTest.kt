@@ -232,6 +232,22 @@ class DashMp4MuxerTest {
         assertEquals("", decodeErrors(tagged))
     }
 
+    @Test fun `audio-only trim keeps the frames in range as a regular m4a`() {
+        val audio = dashAudio(seconds = 10)
+        val out = File(tmp.root, "trimmed.m4a")
+        DashMp4Muxer.trimAudio(audio, out, io.github.rudolfhk.audiosaver.core.audio.TimeRange(2_000, 6_500))
+        assertEquals(listOf("aac"), probe(out, "stream=codec_name"))
+        assertEquals("", decodeErrors(out))
+        val duration = probe(out, "format=duration").single().toDouble()
+        assertTrue(abs(duration - 4.5) < 0.05, "duration $duration")
+        assertEquals(listOf("ftyp", "moov", "mdat"), layout(out).topLevel)
+        // Frame-boundary cut of the same AAC frames: decoding the trimmed file gives the same
+        // samples as decoding the original and cutting there (give or take the codec's overlap).
+        val whole = File(tmp.root, "whole.m4a")
+        DashMp4Muxer.trimAudio(audio, whole, io.github.rudolfhk.audiosaver.core.audio.TimeRange.ALL)
+        assertEquals(md5(audio, "a"), md5(whole, "a"), "an untrimmed rewrite must decode identically")
+    }
+
     @Test fun `swapped inputs, non-fragmented input and junk are rejected with a reason`() {
         val video = dashVideo()
         val audio = dashAudio()
