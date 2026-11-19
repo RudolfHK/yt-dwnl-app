@@ -8,7 +8,11 @@ import io.github.rudolfhk.audiosaver.core.engine.FailureReason
 import io.github.rudolfhk.audiosaver.core.engine.ResolvedAudio
 import io.github.rudolfhk.audiosaver.core.engine.VideoStreamSource
 import io.github.rudolfhk.audiosaver.core.link.VideoId
+import io.github.rudolfhk.audiosaver.core.tag.CoverArt
+import io.github.rudolfhk.audiosaver.core.tag.CoverGeometry
 import io.github.rudolfhk.audiosaver.core.tag.Mp4Tagger
+import io.github.rudolfhk.audiosaver.core.tag.ParsedTitle
+import io.github.rudolfhk.audiosaver.core.tag.TitleParser
 import io.github.rudolfhk.audiosaver.core.tag.TrackMetadata
 import io.github.rudolfhk.audiosaver.core.video.DashMp4Muxer
 import io.github.rudolfhk.audiosaver.core.video.MuxException
@@ -17,6 +21,8 @@ import java.io.File
 import java.io.IOException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
@@ -44,7 +50,11 @@ interface AudioSink {
  * or both. With video only, the audio stream is still downloaded - it is the MP4's soundtrack - but
  * no audio file is saved. Batches from mixes/albums always use [AUDIO_ONLY].
  */
-data class DownloadOptions(val saveAudio: Boolean = true, val video: VideoQuality? = null) {
+data class DownloadOptions(
+    val saveAudio: Boolean = true,
+    val video: VideoQuality? = null,
+    val processing: Processing = Processing(),
+) {
     init {
         require(saveAudio || video != null) { "Nothing to download" }
     }
@@ -120,6 +130,9 @@ sealed interface DownloadState {
     /** Combining the video and audio streams into one MP4, tagging and saving it. */
     data class Merging(val videoId: VideoId, val title: String) : DownloadState
 
+    /** A slower step after the download: analysis, MP3 encoding, Opus remuxing, or waiting for the user's tags. */
+    data class Processing(val videoId: VideoId, val title: String, val step: ProcessingStep) : DownloadState
+
     /**
      * [saved] is the audio file (null when only the video was requested);
      * [video] is null when no video was requested.
@@ -128,7 +141,7 @@ sealed interface DownloadState {
     data class Failed(val videoId: VideoId, val reason: FailureReason, val detail: String) : DownloadState
     data class Cancelled(val videoId: VideoId) : DownloadState
 
-    val isActive: Boolean get() = this is Resolving || this is Downloading || this is Saving || this is Merging
+    val isActive: Boolean get() = this is Resolving || this is Downloading || this is Saving || this is Merging || this is Processing
 }
 
 /**
@@ -142,7 +155,9 @@ class AudioDownloadPipeline(
     private val downloader: HttpAudioDownloader,
     private val sink: AudioSink,
     private val workDir: File,
+    private val toolkit: Toolkit = Toolkit(),
 ) {
+    private val finisher = AudioFinisher(toolkit, workDir)
 
     suspend fun run(
         videoId: VideoId,
@@ -151,82 +166,114 @@ class AudioDownloadPipeline(
         onState: (DownloadState) -> Unit,
     ) {
         val raw = File(workDir, "$videoId.part")
-        val tagged = File(workDir, "$videoId.tagged")
+        val muxAudio = File(workDir, "$videoId.mux.part")
         val rawVideo = File(workDir, "$videoId.video.part")
         val merged = File(workDir, "$videoId.merged.mp4")
         val taggedVideo = File(workDir, "$videoId.tagged.mp4")
+        val processing = options.processing
         try {
-            onState(DownloadState.Resolving(videoId))
-            val audio = engine.resolve(videoId)
-            workDir.mkdirs()
+            coroutineScope {
+                onState(DownloadState.Resolving(videoId))
+                val audio = engine.resolve(videoId)
+                workDir.mkdirs()
 
-            // Decide the video part up front, so a missing stream or a full disk is reported
-            // before anything big is downloaded - and never costs the audio.
-            var videoResult: VideoResult? = null
-            var videoStream: VideoStreamSource? = null
-            options.video?.let { quality ->
-                val (stream, problem) = videoStreamFor(audio, quality)
-                videoResult = problem ?: stream?.let { checkSpace(audio, it) }
-                if (videoResult == null) videoStream = stream
-            }
-            if (!options.saveAudio && videoStream == null) {
-                // Video only and it can't be made: that's simply this download failing.
-                throw (videoResult as VideoResult.Failed).let { AudioSaveException(it.reason, it.detail) }
-            }
+                // Decide the video part up front, so a missing stream or a full disk is reported
+                // before anything big is downloaded - and never costs the audio.
+                var videoResult: VideoResult? = null
+                var videoStream: VideoStreamSource? = null
+                options.video?.let { quality ->
+                    val (stream, problem) = videoStreamFor(audio, quality)
+                    videoResult = problem ?: stream?.let { checkSpace(audio, it) }
+                    if (videoResult == null) videoStream = stream
+                }
+                if (!options.saveAudio && videoStream == null) {
+                    // Video only and it can't be made: that's simply this download failing.
+                    throw (videoResult as VideoResult.Failed).let { AudioSaveException(it.reason, it.detail) }
+                }
 
-            val audioLength = audio.stream.contentLength
-            val combinedTotal = if (videoStream == null) audioLength else audioLength?.let { a -> videoStream.contentLength?.let { a + it } }
-            val audioProgress = ThrottledProgress { done, total ->
-                // Audio only: whatever the server says (Content-Length) beats nothing. With a video,
-                // only a total covering both files is honest, otherwise the bar is indeterminate.
-                val shownTotal = if (videoStream == null) total ?: combinedTotal else combinedTotal
-                onState(
-                    DownloadState.Downloading(
-                        videoId, audio.title, done, shownTotal, withVideo = videoStream != null, videoOnly = !options.saveAudio, uploader = audio.uploader,
-                    ),
-                )
-            }
-            downloader.download(audio.stream, raw, audioProgress::report)
-            audioProgress.flush()
+                // The audio file comes from the stream matching the chosen format; the video is
+                // always merged with the AAC stream (an MP4 can't hold YouTube's WebM Opus).
+                val fileSource = if (options.saveAudio && processing.audioFormat == AudioFormat.OPUS) audio.opusStream ?: audio.stream else audio.stream
+                val separateMuxAudio = videoStream != null && fileSource !== audio.stream
+                // One bar over everything downloaded - known only if every part's size is known.
+                val parts = listOfNotNull(fileSource, audio.stream.takeIf { separateMuxAudio }, videoStream).map { it.contentLength }
+                val combinedTotal = if (parts.all { it != null }) parts.sumOf { it!! } else null
 
-            var saved: SavedAudio? = null
-            var taggingWarning: String? = null
-            if (options.saveAudio) {
-                onState(DownloadState.Saving(videoId, audio.title))
-                val metadata = metadataFor(audio, context)
-                val (fileToSave, warning) = withContext(Dispatchers.IO) { tagIfPossible(audio, raw, tagged, metadata) }
-                taggingWarning = warning
-                val fileName = FileNames.forTrack(metadata.artist, metadata.title, audio.stream.container.extension, context.trackNumber)
-                saved = saveVerified(fileToSave, fileName, audio.stream.container.mimeType, metadata, context.subfolder?.let(FileNames::forFolder), MediaKind.AUDIO)
-                tagged.delete()
-            }
+                // Tags, cover art and the user's review run alongside the download.
+                val proposed = metadataFor(audio, context, processing)
+                val cover = if (processing.coverArt && toolkit.cropper != null) async { fetchCover(audio) } else null
+                val reviewer = toolkit.reviewer?.takeIf { processing.reviewTags }
+                val review = reviewer?.let { r -> async { r.review(TagProposal(audio.title, proposed)) } }
 
-            if (videoStream != null) {
-                videoResult = try {
-                    val offset = raw.length()
-                    val videoProgress = ThrottledProgress { done, _ ->
-                        onState(
-                            DownloadState.Downloading(
-                                videoId, audio.title, offset + done, combinedTotal, withVideo = true, videoOnly = !options.saveAudio, uploader = audio.uploader,
-                            ),
-                        )
-                    }
-                    downloader.download(videoStream, rawVideo, videoProgress::report)
-                    videoProgress.flush()
-                    onState(DownloadState.Merging(videoId, audio.title))
-                    saveVideo(audio, videoStream, raw, rawVideo, merged, taggedVideo)
-                } catch (e: Exception) {
-                    if (e is CancellationException || !currentCoroutineContext().isActive) throw e
-                    // The audio is already saved: report the video's own failure next to it.
-                    VideoResult.Failed(
-                        (e as? AudioSaveException)?.reason ?: FailureReason.UNKNOWN,
-                        (e as? AudioSaveException)?.detail ?: "${e::class.java.simpleName}: ${e.message}",
+                val withVideo = videoStream != null
+                fun progress(offset: Long) = ThrottledProgress { done, total ->
+                    // A single file: whatever the server says (Content-Length) beats nothing. With
+                    // several, only a total covering all of them is honest, else indeterminate.
+                    val shownTotal = if (!withVideo && !separateMuxAudio) total ?: combinedTotal else combinedTotal
+                    onState(
+                        DownloadState.Downloading(
+                            videoId, audio.title, offset + done, shownTotal,
+                            withVideo = withVideo, videoOnly = !options.saveAudio, uploader = proposed.artist,
+                        ),
                     )
                 }
+                val first = progress(0)
+                downloader.download(fileSource, raw, first::report)
+                first.flush()
+                var downloaded = raw.length()
+
+                // Wait for the user's tags (if asked) and the cover before writing any tags.
+                var metadata = proposed
+                if (review != null) {
+                    if (!review.isCompleted) onState(DownloadState.Processing(videoId, proposed.title, ProcessingStep.WAITING_FOR_TAGS))
+                    metadata = review.await() ?: throw CancellationException("Cancelled while confirming the tags")
+                }
+                val coverArt = cover?.await()
+                metadata = metadata.copy(cover = coverArt?.first)
+                val coverWarning = coverArt?.second
+
+                var saved: SavedAudio? = null
+                var warnings: List<String> = listOfNotNull(coverWarning)
+                if (options.saveAudio) {
+                    val finished = finisher.finish(raw, fileSource.container, metadata, processing) { step ->
+                        onState(DownloadState.Processing(videoId, metadata.title, step))
+                    }
+                    onState(DownloadState.Saving(videoId, metadata.title))
+                    val fileName = FileNames.forTrack(metadata.artist, metadata.title, finished.extension, context.trackNumber)
+                    saved = saveVerified(finished.file, fileName, finished.mimeType, finished.metadata, context.subfolder?.let(FileNames::forFolder), MediaKind.AUDIO)
+                    warnings = warnings + finished.warnings
+                }
+
+                val video = videoStream
+                if (video != null) {
+                    videoResult = try {
+                        val audioForVideo = if (separateMuxAudio) {
+                            val p = progress(downloaded)
+                            downloader.download(audio.stream, muxAudio, p::report)
+                            p.flush()
+                            downloaded += muxAudio.length()
+                            muxAudio
+                        } else {
+                            raw
+                        }
+                        val videoProgress = progress(downloaded)
+                        downloader.download(video, rawVideo, videoProgress::report)
+                        videoProgress.flush()
+                        onState(DownloadState.Merging(videoId, metadata.title))
+                        saveVideo(metadata.copy(replayGain = null), video, audioForVideo, rawVideo, merged, taggedVideo)
+                    } catch (e: Exception) {
+                        if (e is CancellationException || !currentCoroutineContext().isActive) throw e
+                        // The audio is already saved: report the video's own failure next to it.
+                        VideoResult.Failed(
+                            (e as? AudioSaveException)?.reason ?: FailureReason.UNKNOWN,
+                            (e as? AudioSaveException)?.detail ?: "${e::class.java.simpleName}: ${e.message}",
+                        )
+                    }
+                }
+                val result = videoResult
+                if (!options.saveAudio && result is VideoResult.Failed) throw AudioSaveException(result.reason, result.detail)
+                onState(DownloadState.Done(videoId, saved, warnings.joinToString("\n").ifEmpty { null }, result))
             }
-            val result = videoResult
-            if (!options.saveAudio && result is VideoResult.Failed) throw AudioSaveException(result.reason, result.detail)
-            onState(DownloadState.Done(videoId, saved, taggingWarning, result))
         } catch (e: Exception) {
             // Blocking I/O aborted by cancellation surfaces as an IOException, not a CancellationException.
             if (e is CancellationException || !currentCoroutineContext().isActive) {
@@ -241,7 +288,20 @@ class AudioDownloadPipeline(
                 },
             )
         } finally {
-            listOf(raw, tagged, rawVideo, merged, taggedVideo).forEach(File::delete)
+            listOf(raw, muxAudio, rawVideo, merged, taggedVideo).forEach(File::delete)
+            workDir.listFiles { f -> f.name.startsWith("$videoId.") }?.forEach(File::delete)
+        }
+    }
+
+    /** The cover, or a warning saying why there's none. Never fails the download. */
+    private suspend fun fetchCover(audio: ResolvedAudio): Pair<CoverArt?, String?> {
+        val thumbnail = CoverGeometry.best(audio.thumbnails) ?: return null to null
+        return try {
+            val bytes = downloader.fetchBytes(thumbnail.url)
+            val cover = withContext(Dispatchers.Default) { toolkit.cropper?.cropSquare(bytes, COVER_SIZE) }
+            cover to (if (cover == null) "No cover art: the thumbnail couldn't be decoded." else null)
+        } catch (e: AudioSaveException) {
+            null to "No cover art: ${e.detail}"
         }
     }
 
@@ -277,7 +337,7 @@ class AudioDownloadPipeline(
     }
 
     private suspend fun saveVideo(
-        audio: ResolvedAudio,
+        metadata: TrackMetadata,
         stream: VideoStreamSource,
         rawAudio: File,
         rawVideo: File,
@@ -292,7 +352,6 @@ class AudioDownloadPipeline(
             }
             rawVideo.delete()
         }
-        val metadata = metadataFor(audio, TrackContext.NONE)
         val warning = withContext(Dispatchers.IO) {
             try {
                 Mp4Tagger.tag(merged, tagged, metadata)
@@ -327,29 +386,22 @@ class AudioDownloadPipeline(
         return saved
     }
 
-    private fun metadataFor(audio: ResolvedAudio, context: TrackContext) = TrackMetadata(
-        title = audio.title,
-        artist = audio.uploader,
-        year = audio.uploadYear,
-        comment = audio.videoId.watchUrl,
-        album = context.album,
-        albumArtist = context.albumArtist,
-        trackNumber = context.trackNumber,
-        trackTotal = context.trackTotal,
-    )
-
-    private fun tagIfPossible(audio: ResolvedAudio, raw: File, tagged: File, metadata: TrackMetadata): Pair<File, String?> {
-        if (!audio.stream.container.supportsTagging) {
-            return raw to "Saved as ${audio.stream.container.extension.uppercase()} without embedded tags " +
-                "(no M4A stream was offered for this video)."
+    private fun metadataFor(audio: ResolvedAudio, context: TrackContext, processing: Processing): TrackMetadata {
+        val (artist, title) = if (processing.smartTitles) {
+            TitleParser.parse(audio.title, audio.channel ?: audio.uploader)
+        } else {
+            ParsedTitle(audio.uploader, audio.title)
         }
-        return try {
-            Mp4Tagger.tag(raw, tagged, metadata)
-            tagged to null
-        } catch (e: IOException) {
-            // The audio itself is fine - keep it rather than failing the whole job, but say so.
-            raw to "Saved without embedded tags: ${e.message}"
-        }
+        return TrackMetadata(
+            title = title,
+            artist = artist,
+            year = audio.uploadYear,
+            comment = audio.videoId.watchUrl,
+            album = context.album,
+            albumArtist = context.albumArtist,
+            trackNumber = context.trackNumber,
+            trackTotal = context.trackTotal,
+        )
     }
 
     /** Never report success on the strength of "no exception was thrown". */
@@ -367,6 +419,7 @@ class AudioDownloadPipeline(
 
     companion object {
         const val VIDEO_MIME = "video/mp4"
+        private const val COVER_SIZE = 720
     }
 
     /** Reports at most every 1% / 200 ms so the UI and notification aren't flooded. */

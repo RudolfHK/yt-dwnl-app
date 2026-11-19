@@ -65,7 +65,15 @@ data class ResolvedAudio(
      * downloadable). Empty when the engine found none; only used when the user asks for the video.
      */
     val videoStreams: List<VideoStreamSource> = emptyList(),
+    /** YouTube's Opus stream (WebM), when the user prefers Opus; null if the video has none. */
+    val opusStream: AudioStreamSource? = null,
+    /** The channel name as YouTube shows it ("Artist - Topic", "ArtistVEVO"), for title parsing. */
+    val channel: String? = null,
+    /** Video thumbnails, any order; the largest becomes the cover art. */
+    val thumbnails: List<Thumbnail> = emptyList(),
 )
+
+data class Thumbnail(val url: String, val width: Int, val height: Int)
 
 data class VideoStreamSource(
     override val url: String,

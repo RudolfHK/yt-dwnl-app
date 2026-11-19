@@ -30,6 +30,7 @@ class HistoryRecorder(private val clock: () -> Long = System::currentTimeMillis)
             is DownloadState.Downloading -> titles[videoId] = state.title to state.uploader
             is DownloadState.Saving -> titles.putIfAbsent(videoId, state.title to null)
             is DownloadState.Merging -> titles.putIfAbsent(videoId, state.title to null)
+            is DownloadState.Processing -> titles.putIfAbsent(videoId, state.title to null)
             is DownloadState.Done -> return singleEntry(videoId, options, state).also { titles.remove(videoId) }
             is DownloadState.Failed -> return failedEntry(videoId, options, state).also { titles.remove(videoId) }
             is DownloadState.Cancelled -> titles.remove(videoId)

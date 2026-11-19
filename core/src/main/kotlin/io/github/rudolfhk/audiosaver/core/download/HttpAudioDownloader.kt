@@ -51,6 +51,22 @@ class HttpAudioDownloader(
             }
         }
 
+    /** Small downloads such as thumbnails: the whole body, at most [maxBytes]. */
+    suspend fun fetchBytes(url: String, maxBytes: Int = 8 * 1024 * 1024): ByteArray = withContext(Dispatchers.IO) {
+        try {
+            execute(Request.Builder().url(url).header("User-Agent", "Mozilla/5.0").build()) { code, body ->
+                if (code != 200) throw httpFailure(code)
+                val out = java.io.ByteArrayOutputStream()
+                val copied = copy(body, out, maxBytes.toLong() + 1) {}
+                if (copied > maxBytes) throw IOException("Response larger than $maxBytes bytes")
+                out.toByteArray()
+            }
+        } catch (e: IOException) {
+            currentCoroutineContext().ensureActive()
+            throw networkFailure(e)
+        }
+    }
+
     /**
      * Walks through the source's request variants: the current one is used until the host refuses
      * it, then the next one is tried for the same bytes. Refusals don't count as network failures.

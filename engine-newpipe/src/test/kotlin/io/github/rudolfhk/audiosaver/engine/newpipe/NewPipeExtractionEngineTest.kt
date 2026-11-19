@@ -170,4 +170,18 @@ class NewPipeExtractionEngineTest {
         assertEquals(1, other.size)
         assertEquals(OkHttpNewPipeDownloader.USER_AGENT, other.single().headers["User-Agent"])
     }
+
+    @Test fun `opus choice for opus fans - original track, highest bitrate, progressive only`() {
+        val chosen = NewPipeExtractionEngine.chooseOpusStream(
+            listOf(
+                stream("140", MediaFormat.M4A, 128_000),
+                stream("250", MediaFormat.WEBMA_OPUS, 70_000),
+                stream("251", MediaFormat.WEBMA_OPUS, 160_000),
+                stream("251-dub", MediaFormat.WEBMA_OPUS, 170_000, track = AudioTrackType.DUBBED),
+                stream("251-dash", MediaFormat.WEBMA_OPUS, 300_000, delivery = DeliveryMethod.DASH),
+            ),
+        )
+        assertEquals("251", chosen?.id)
+        assertNull(NewPipeExtractionEngine.chooseOpusStream(listOf(stream("140", MediaFormat.M4A, 128_000))))
+    }
 }

@@ -12,6 +12,7 @@ import io.github.rudolfhk.audiosaver.core.engine.FailureReason
 import io.github.rudolfhk.audiosaver.core.engine.PageToken
 import io.github.rudolfhk.audiosaver.core.engine.RequestVariant
 import io.github.rudolfhk.audiosaver.core.engine.ResolvedAudio
+import io.github.rudolfhk.audiosaver.core.engine.Thumbnail
 import io.github.rudolfhk.audiosaver.core.engine.VideoStreamSource
 import io.github.rudolfhk.audiosaver.core.link.CollectionKind
 import io.github.rudolfhk.audiosaver.core.link.CollectionRef
@@ -156,6 +157,21 @@ class NewPipeExtractionEngine(
             ),
             // Cheap to collect here (same player response); only downloaded if the user wants the video.
             videoStreams = runCatching { extractor.videoOnlyStreams }.getOrDefault(emptyList()).mapNotNull(::toVideoStream),
+            opusStream = chooseOpusStream(streams)?.let { opus ->
+                AudioStreamSource(
+                    url = opus.content,
+                    container = AudioContainer.WEBM_OPUS,
+                    codec = opus.codec,
+                    averageBitrate = opus.averageBitrate.takeIf { it > 0 },
+                    contentLength = opus.itagItem?.contentLength?.takeIf { it > 0 },
+                    requestHeaders = mapOf("User-Agent" to OkHttpNewPipeDownloader.USER_AGENT),
+                    requestVariants = requestVariantsFor(opus.content),
+                )
+            },
+            channel = runCatching { extractor.uploaderName }.getOrNull()?.takeIf { it.isNotBlank() },
+            thumbnails = runCatching { extractor.thumbnails }.getOrDefault(emptyList())
+                .filter { it.url.isNotBlank() }
+                .map { Thumbnail(it.url, it.width.coerceAtLeast(0), it.height.coerceAtLeast(0)) },
         )
     }
 
@@ -269,6 +285,17 @@ class NewPipeExtractionEngine(
         /** YouTube names auto-generated album playlists "Album - <name>". */
         internal fun cleanCollectionTitle(name: String, kind: CollectionKind): String =
             if (kind == CollectionKind.ALBUM) name.removePrefix("Album - ").trim().ifEmpty { name } else name
+
+        /** The best original-language Opus stream, for users who prefer Opus over AAC. */
+        internal fun chooseOpusStream(streams: List<AudioStream>): AudioStream? =
+            streams
+                .filter { it.isUrl && it.deliveryMethod == DeliveryMethod.PROGRESSIVE_HTTP }
+                .filter { it.format == MediaFormat.WEBMA_OPUS || (it.format == MediaFormat.WEBMA && it.codec?.contains("opus") == true) }
+                .sortedWith(
+                    compareByDescending<AudioStream> { it.audioTrackType == null || it.audioTrackType == AudioTrackType.ORIGINAL }
+                        .thenByDescending { it.averageBitrate },
+                )
+                .firstOrNull()
 
         /** "Artist - Topic" is YouTube's auto-generated channel for a label upload; the artist is the part before. */
         internal fun cleanUploader(name: String): String? =
