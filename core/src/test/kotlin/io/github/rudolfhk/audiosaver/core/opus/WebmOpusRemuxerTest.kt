@@ -38,6 +38,12 @@ class WebmOpusRemuxerTest {
         album = "An Album", trackNumber = 3, trackTotal = 9, replayGain = ReplayGain(loudnessLufs = -9.0, peak = 0.9),
     )
 
+    private fun assertSameAudio(webm: File, ogg: File) {
+        if (FfmpegTools.decodedMd5(webm) != FfmpegTools.decodedMd5(ogg, "a:0")) {
+            kotlin.test.fail("decoded audio differs: " + FfmpegTools.explainDecodeDifference(webm, ogg))
+        }
+    }
+
     @Test fun `remuxed audio decodes to exactly the same samples`() {
         val input = webm()
         val out = File(tmp.root, "out.opus")
@@ -45,7 +51,7 @@ class WebmOpusRemuxerTest {
         assertEquals(listOf("opus"), FfmpegTools.probe(out, "stream=codec_name"))
         assertEquals("ogg", FfmpegTools.probe(out, "format=format_name").single())
         assertEquals("", FfmpegTools.decodeErrors(out), "CRC or framing errors")
-        assertEquals(FfmpegTools.decodedMd5(input), FfmpegTools.decodedMd5(out), "decoded audio differs")
+        assertSameAudio(input, out)
         assertTrue(abs(FfmpegTools.decodedSeconds(out) - 6.0) < 0.002, "decoded ${FfmpegTools.decodedSeconds(out)}")
     }
 
@@ -71,7 +77,7 @@ class WebmOpusRemuxerTest {
         assertTrue(out.length() > 100_000)
         assertEquals("", FfmpegTools.decodeErrors(out))
         assertTrue(FfmpegTools.probe(out, "stream=codec_name").contains("mjpeg"))
-        assertEquals(FfmpegTools.decodedMd5(File(tmp.root, "in.webm")), FfmpegTools.decodedMd5(out, "a:0"))
+        assertSameAudio(File(tmp.root, "in.webm"), out)
     }
 
     @Test fun `trimming cuts at packet boundaries`() {

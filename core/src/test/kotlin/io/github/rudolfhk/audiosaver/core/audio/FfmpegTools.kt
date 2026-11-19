@@ -46,6 +46,44 @@ object FfmpegTools {
 
     fun durationSeconds(file: File): Double = probe(file, "format=duration").single().toDouble()
 
+    /** Decoded interleaved 16-bit samples at the file's own rate and channel count. */
+    fun decodedPcm(file: File, streamSpecifier: String = "a:0"): ShortArray {
+        val p = ProcessBuilder("ffmpeg", "-v", "error", "-i", file.absolutePath, "-map", "0:$streamSpecifier", "-f", "s16le", "-acodec", "pcm_s16le", "-")
+            .redirectError(ProcessBuilder.Redirect.DISCARD).start()
+        val bytes = p.inputStream.use { it.readBytes() }
+        p.waitFor()
+        val out = ShortArray(bytes.size / 2)
+        ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer().get(out)
+        return out
+    }
+
+    /**
+     * Why two files that should decode identically don't: sample counts, the frame offset at
+     * which they line up (if any), and what ffprobe sees of the padding. For assertion messages.
+     */
+    fun explainDecodeDifference(expected: File, actual: File, channels: Int = 2): String {
+        val a = decodedPcm(expected)
+        val b = decodedPcm(actual)
+        val framesA = a.size / channels
+        val framesB = b.size / channels
+        // Find k with b[i] == a[i + k] over a window from the middle (k > 0: actual starts later in the audio).
+        val window = minOf(4800, framesA / 4, framesB / 4)
+        val mid = framesB / 2
+        val offset = (-4000..4000).firstOrNull { k ->
+            (0 until window).all { i ->
+                val ia = mid + i + k
+                ia in 0 until framesA && (0 until channels).all { c -> b[(mid + i) * channels + c] == a[ia * channels + c] }
+            }
+        }
+        fun padding(file: File) = run(
+            "ffprobe", "-v", "error", "-show_entries", "stream=start_pts,start_time,duration_ts,initial_padding,codec_name",
+            "-of", "compact", file.absolutePath,
+        ).second.trim().replace('\n', ' ')
+        return "decoded frames: expected=$framesA actual=$framesB (diff ${framesB - framesA}); " +
+            "aligned at offset ${offset ?: "none in ±4000"}; " +
+            "expected: ${padding(expected)}; actual: ${padding(actual)}; ffmpeg ${run("ffmpeg", "-version").second.lineSequence().first()}"
+    }
+
     /** What a player actually outputs: decoded samples (encoder delay / pre-skip removed) at 48 kHz. */
     fun decodedSeconds(file: File, streamSpecifier: String = "a:0"): Double {
         val p = ProcessBuilder("ffmpeg", "-v", "error", "-i", file.absolutePath, "-map", "0:$streamSpecifier", "-ac", "1", "-ar", "48000", "-f", "s16le", "-")
