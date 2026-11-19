@@ -3,7 +3,9 @@
 A small, single-purpose Android app: **paste or share a YouTube link → an audio file appears in your phone's Music folder.**
 Paste a **mix, album or playlist** link instead and it lists the songs so you can tick which ones to download.
 For a single video you choose what to save: **audio, video (MP4), or both**. A **history** lists every download — what was
-saved where, and what failed and why.
+saved where, and what failed and why. Optional **advanced settings** (gear icon) add Opus or MP3 output, cutting
+intros and silence, loudness tags, cover art, smarter titles, editing tags before saving, "only new songs" for
+playlists, parallel downloads and an update check.
 No library, no accounts, no in-app playback, no browsing.
 
 > **Personal use only.** Use this app only for content you have the right to download: your own uploads, content under a
@@ -12,8 +14,9 @@ No library, no accounts, no in-app playback, no browsing.
 
 - Kotlin + Jetpack Compose, minSdk 29 (Android 10), compile/target SDK 37 (Android 17)
 - Extraction: [NewPipeExtractor](https://github.com/TeamNewPipe/NewPipeExtractor), behind a swappable interface
-- Output: AAC in M4A (YouTube's own audio stream, no re-encoding), with embedded title/artist/year tags, saved to
-  `Music/AudioSaver` through MediaStore — **no storage permission**
+- Output: AAC in M4A by default (YouTube's own audio stream, no re-encoding), with embedded title/artist/year tags and
+  the thumbnail as cover art, saved to `Music/AudioSaver` through MediaStore — **no storage permission**. Optionally
+  Opus (`.opus`, also not re-encoded) or MP3 (re-encoded on the phone).
 - License: **GPL-3.0-or-later** (required by NewPipeExtractor, see below)
 
 ## Building
@@ -25,6 +28,10 @@ No library, no accounts, no in-app playback, no browsing.
   Android emulators (API 29 and 35)** that check the video and audio files the way a phone reads them. A
   `live-youtube` job (manual: *Run workflow*) runs the real-YouTube tests — but YouTube currently answers every
   GitHub runner with "confirm you're not a bot", so run those from a home network instead (see *Test plan*).
+- **Releases:** pushing a tag like `v1.1` builds a release APK (version name `1.1`) and publishes it as a GitHub
+  release — that is what the in-app update check looks for. It is signed with your key when the repository secrets
+  `AUDIOSAVER_KEYSTORE_BASE64` (base64 of the `.jks`), `AUDIOSAVER_KEYSTORE_PASSWORD`, `AUDIOSAVER_KEY_ALIAS` and
+  `AUDIOSAVER_KEY_PASSWORD` exist, otherwise with a debug key (installable, but updates then need the same key).
 
 NewPipeExtractor is only published on JitPack. If JitPack ever fails to serve the pinned commit, do what NewPipe does:
 change the hash in `gradle/libs.versions.toml` (e.g. use a different, newer commit, or add/remove a character so JitPack
@@ -35,16 +42,26 @@ rebuilds it).
 ```
 core/            Pure Kotlin/JVM, no Android. Unit-tested on the JVM.
   link/          YouTubeLinkParser: paste/share text -> VideoId, or a mix/album/playlist CollectionRef, or why not
-  collection/    CollectionListing: the pick-your-songs list (selection, load more, de-dup, 200-song cap)
+  collection/    CollectionListing: the pick-your-songs list (selection, load more, de-dup, 200-song cap, only new songs)
   engine/        ExtractionEngine interface + models + FailureReason   <-- the seam
-  download/      HttpAudioDownloader: ranged, resumable, cancellable HTTP download with progress
-  tag/           Mp4Tagger: writes iTunes-style tags into M4A/MP4 in one streaming pass (no FFmpeg)
-  video/         DashMp4Muxer: merges YouTube's video-only + audio-only streams into one MP4 (no FFmpeg);
-                 VideoQuality: picks the H.264 stream for the chosen quality
-  pipeline/      AudioDownloadPipeline: resolve -> download -> tag -> save -> verify, emits DownloadState
+  download/      HttpAudioDownloader: ranged, resumable, cancellable HTTP download with progress, optional
+                 parallel chunks
+  tag/           Mp4Tagger: iTunes-style tags, cover and ReplayGain into M4A/MP4 in one streaming pass (no FFmpeg);
+                 TitleParser: "Artist - Song (Official Video)" -> artist + title; CoverGeometry: square crop
+  audio/         AudioAnalyzer: EBU R128 loudness (ReplayGain 2.0 / R128 gain) and silence detection on PCM;
+                 TimeRange/TimeCodes: cuts; PcmDecoder: the interface Android implements with MediaCodec
+  opus/          WebmOpusRemuxer: YouTube's WebM Opus -> standard Ogg Opus with tags and cover, no re-encoding
+  mp3/           Mp3Exporter: PCM -> MP3 (LAME via jump3r, pure Java) + ID3v2.3/ID3v1 tags
+  video/         DashMp4Muxer: merges YouTube's video-only + audio-only streams into one MP4 and cuts audio at
+                 frame boundaries (no FFmpeg); VideoQuality: picks the H.264 stream for the chosen quality
+  pipeline/      AudioDownloadPipeline: resolve -> download -> (review tags) -> process -> tag -> save -> verify,
+                 emits DownloadState; AudioFinisher: the format/cut/loudness step; Processing: the options
                  BatchDownloader: runs the selected songs through that pipeline one by one
+  history/       HistoryLog (JSON lines) + HistoryRecorder
+  update/        UpdateChecker: latest app / NewPipeExtractor release from api.github.com
 engine-newpipe/  The ONLY module that imports NewPipeExtractor (pure JVM)
-app/             Android: Compose UI, share target, foreground service, notifications, MediaStore sink
+app/             Android: Compose UI, share target, foreground service, notifications, MediaStore sink,
+                 advanced settings, MediaCodec decoder, Bitmap cover cropper, tag-review dialog, update card
 ```
 
 **Swapping the extraction engine** (this *will* be needed one day — YouTube breaks extractors on purpose): write a new
@@ -113,8 +130,10 @@ YouTube offers audio-only streams as AAC-LC ~128 kbps in MP4 (itag 140), HE-AAC 
   absolute offset behind it (`stco`/`co64`, `tfhd.base_data_offset`, `tfra`), and rewrites the brand to `M4A ` (what
   yt-dlp's FFmpeg "FixupM4a" step does), all in one streaming pass. Its tests round-trip four real ffmpeg-produced MP4
   layouts and check with ffprobe/ffmpeg that the tags read back and the **decoded audio is bit-identical**.
-- If a video has no M4A stream (rare), the Opus/WebM stream is saved as `.webm` without embedded tags, and the app says so.
+- If a video has no M4A stream (rare), the Opus stream is saved as a tagged `.opus` file instead, and the app says so.
   If tagging fails for an unexpected file layout, the untagged audio is still saved and the app says so.
+- Opus and MP3 are available as options (see *Advanced settings*). MP3 costs about 200 KB of pure-Java LAME (jump3r,
+  LGPL) rather than an FFmpeg build, and uses the phone's own MediaCodec decoder — so the "no FFmpeg" rule holds.
 
 ### Background work and storage
 
@@ -230,6 +249,28 @@ single audio downloads. *Clear* (with confirmation) empties the list; files stay
 - Stored only on the phone: an append-only JSON-lines file in app-private storage (`files/history.jsonl`, excluded
   from backup), newest 1000 entries. A half-written line after a crash is skipped on the next start, not fatal.
 
+## Advanced settings
+
+Gear icon on the main screen. Everything is persisted; the defaults keep the app "paste, download".
+
+| Setting | Default | What it does |
+|---|---|---|
+| **Audio format** | M4A | **M4A** (AAC as-is). **Opus**: YouTube's higher-quality stream (≈160 kbps, itag 251) remuxed from WebM into a standard Ogg Opus `.opus` file (RFC 7845) with Vorbis-comment tags and the cover — no re-encoding, bit-identical audio; needs a newer player. **MP3**: decoded with MediaCodec and encoded on the phone (LAME CBR 192 kbps, ID3v2.3 + ID3v1) for old car stereos; slower and a generation of lossy coding. With *Video* also ticked, the MP4 still gets YouTube's AAC (an extra ~3 MB download for Opus). If the chosen format isn't possible (no Opus stream, decoder missing), the song is saved in the next best format and the card says so. |
+| **Cut start and end** | off | Start/end fields (`m:ss`, `h:mm:ss`, `83`, `1:23.5`) under single links, e.g. to skip a music video's intro. M4A/Opus are cut at codec frame boundaries (≈20 ms) without re-encoding; Opus keeps the standard 80 ms pre-roll so the first sound is clean; MP3 is cut sample-exactly. Audio file only. |
+| **Trim silence** | off | Decodes once, finds where the sound starts and ends (peak below −50 dBFS, 150 ms margin kept) and cuts there, combined with a manual cut. Also for batches. |
+| **Loudness tags** | off | EBU R128 / ITU-R BS.1770 integrated loudness of the (cut) song → **ReplayGain 2.0** track gain/peak (reference −18 LUFS) in M4A (`----:com.apple.iTunes:REPLAYGAIN_*`) and MP3 (`TXXX`), **`R128_TRACK_GAIN`** in Opus (RFC 7845 forbids REPLAYGAIN_* there). The audio itself is unchanged; players with ReplayGain support play songs from different videos at a similar volume. Measured within 0.3 LU of ffmpeg's `ebur128`. |
+| **Cover art** | on | Largest thumbnail, centre square (letterbox bars of 4:3 thumbnails skipped), JPEG ≤720 px, embedded in M4A/MP4 (`covr`), Opus (`METADATA_BLOCK_PICTURE`) and MP3 (`APIC`). A failed thumbnail only costs the cover. |
+| **Smart titles** | on | "Artist - Song (Official Video) [HD]" → artist *Artist*, title *Song*; removes official video/audio/lyric video/visualizer/HD/4K/remastered noise, keeps meaningful brackets (*feat.*, *Remix*, *Live*, *Acoustic*); recognises –, —, ~ and quoted titles; leaves "- Topic" channels alone (their titles are already clean). |
+| **Edit tags before saving** | off | Single links: a dialog with title, artist and album appears as soon as the video is resolved, while the download continues. *Save* writes those tags (and file name); *Cancel download* cancels and leaves nothing behind. The notification says "Waiting for you to confirm the tags…". |
+| **Only new songs** | on | Re-opening a mix/album/playlist ticks only songs the history hasn't saved as audio yet; the others are marked "saved before" and can still be ticked. |
+| **Parallel chunk downloads** | off | Big video files are fetched over up to 3 connections (2 MB chunks into their place in the file). The first chunk always goes alone, to settle the request style; on HTTP 429 the download drops back to one connection instead of failing; a host that ignores Range falls back to the normal download. |
+| **Check for updates** | on | At most once a day, two anonymous requests to `api.github.com` (nothing else, nothing about you): this app's latest release and NewPipeExtractor's. A card says when a newer app build exists, or when NewPipeExtractor has a release newer than the built-in commit (2026-10-05) — that's usually the fix when YouTube breaks things. "YouTube changed something" errors then also say so. Dismissing hides the card until a different release appears; offline it retries an hour later. |
+
+**Polish:** the launcher icon has a monochrome layer (Material You themed icons on Android 13+), colours follow the
+wallpaper (dynamic colour) in light and dark mode — on Android 10–11, which have no wallpaper colours, an indigo
+light/dark scheme matching the icon instead of Material's default purple — the window background matches the dark theme from the first frame,
+and on tablets / unfolded phones (≥ 840 dp) the history sits next to the downloader; content is capped at 720 dp wide.
+
 ## Test plan
 
 ### Automated (JVM, run anywhere: `./gradlew :core:test :engine-newpipe:test`)
@@ -237,17 +278,26 @@ single audio downloads. *Clear* (with confirmation) empties the list; files stay
 | Suite | Covers |
 |---|---|
 | `YouTubeLinkParserTest` (13) | watch / youtu.be share links (`?si=`) / m. / music. / shorts / live / embed / nocookie / bare IDs / links inside shared text; mix (incl. seed derivation, genre mixes), music mix, album and playlist links; private (`LL`/`WL`) and malformed lists; empty, garbage, other hosts, look-alike hosts, wrong-length IDs, channel links, with reasons |
-| `Mp4TaggerTest` (9, needs ffmpeg on PATH) | YouTube-style DASH fMP4, fragmented+`mfra`, faststart (`stco`), moov-at-end; album / album-artist / track `3/10` tags; no album fields for mixes; re-tagging replaces tags; junk and truncated input rejected. Verified with ffprobe + bit-identical decoded-audio MD5 |
-| `CollectionListingTest` (7) | default selection, unavailable rows, toggle / all / none, load-more de-dup keeping the user's choices, looping mix ends, 200-song cap, album vs mix batch contexts |
-| `DashMp4MuxerTest` (9, needs ffmpeg) | YouTube-style DASH (relative offsets, `dash` brand, sidx) and absolute-offset fragments with other fps/timescales/sample rates; audio longer than video; DASH zero-length edit lists; verified with ffprobe/ffmpeg: h264+aac, duration, no decode errors, **decoded video and audio bit-identical to the inputs** (B-frame order included); structural checks: regular `ftyp/moov/mdat` layout, keyframe table for video, chunks interleaved, durations in `mvhd`/`tkhd` (ffmpeg would hide these); merged file taggable; swapped, non-fragmented, junk and truncated inputs rejected. Every check was confirmed to fail when the code it guards is broken. |
+| `Mp4TaggerTest` (10, needs ffmpeg on PATH) | cover (`covr`) and ReplayGain freeform atoms; YouTube-style DASH fMP4, fragmented+`mfra`, faststart (`stco`), moov-at-end; album / album-artist / track `3/10` tags; no album fields for mixes; re-tagging replaces tags; junk and truncated input rejected. Verified with ffprobe + bit-identical decoded-audio MD5 |
+| `CollectionListingTest` (8) | only new songs (saved ones unticked, also after *Load more*, still tickable), default selection, unavailable rows, toggle / all / none, load-more de-dup keeping the user's choices, looping mix ends, 200-song cap, album vs mix batch contexts |
+| `DashMp4MuxerTest` (10, needs ffmpeg) | audio cut at frame boundaries (decoded duration, clean decode); YouTube-style DASH (relative offsets, `dash` brand, sidx) and absolute-offset fragments with other fps/timescales/sample rates; audio longer than video; DASH zero-length edit lists; verified with ffprobe/ffmpeg: h264+aac, duration, no decode errors, **decoded video and audio bit-identical to the inputs** (B-frame order included); structural checks: regular `ftyp/moov/mdat` layout, keyframe table for video, chunks interleaved, durations in `mvhd`/`tkhd` (ffmpeg would hide these); merged file taggable; swapped, non-fragmented, junk and truncated inputs rejected. Every check was confirmed to fail when the code it guards is broken. |
 | `VideoOnDeviceTest` (5, **Android emulator, API 29 + 35, in CI**) | merges YouTube-style fixtures *on the device* and reads the result like a phone: `MediaMetadataRetriever` (duration, video + audio, 320×240, title/artist), `MediaExtractor` (both tracks demux to the end, seeking lands near the target), `MediaPlayer.prepare`; saves through the real MediaStore sink into `Movies/AudioSaver` and reads it back from there; checks Android reads the audio file's title/artist/album/track tags |
 | `VideoQualityTest` (5) | tallest H.264 within the ceiling (never VP9/AV1), 60 fps preferred, smallest if all are taller, no H.264 → none |
 | `VideoPipelineTest` (9, needs ffmpeg) | audio + merged, tagged, playable MP4; one progress bar over both, phase order; video HTTP failure keeps the audio; video only saves just the MP4; a failing video-only download is a real failure; no H.264 / not enough space / Opus-only audio reported without downloading the video; cancel mid-video leaves no temp or partial files |
-| `HistoryTest` (14) | one entry per finished download however many progress updates; title/artist kept; partial (audio ✓ video ✗), video-only, failures before a title was known; cancelled not recorded; batch songs recorded once each, cancelled ones skipped, retry runs recorded again; survives restart (newest first); corrupt/half-written lines skipped; 1000-entry cap with compaction; clear; "already saved" ignores failures; unknown future reasons read back; retry asks only for what failed |
-| `BatchDownloaderTest` (5) | order, carries on after a failure, stops on rate-limiting without further requests, cancel keeps finished songs and cancels the rest, album track numbers/folder/tags, retry-failed keeps album context |
-| `HttpAudioDownloaderTest` (15) | chunked Range download, determinate vs indeterminate progress, server ignoring Range, resume after mid-chunk disconnect, 403 / 429, persistent network failure, empty responses, prompt cancel of a stalled read; request styles: NewPipe player style (POST, `range`/`rn` parameters, headers), fallback after a refusal that sticks for later chunks, a server ignoring the range parameter detected, refusal by every style names them, fallback for unknown sizes |
+| `HistoryTest` (15) | saved-audio lookup for "only new songs"; one entry per finished download however many progress updates; title/artist kept; partial (audio ✓ video ✗), video-only, failures before a title was known; cancelled not recorded; batch songs recorded once each, cancelled ones skipped, retry runs recorded again; survives restart (newest first); corrupt/half-written lines skipped; 1000-entry cap with compaction; clear; "already saved" ignores failures; unknown future reasons read back; retry asks only for what failed |
+| `BatchDownloaderTest` (6) | settings reach every song but manual cut and tag dialog don't; order, carries on after a failure, stops on rate-limiting without further requests, cancel keeps finished songs and cancels the rest, album track numbers/folder/tags, retry-failed keeps album context |
+| `TitleParserTest` (7) | "Artist - Song (Official Video) [HD]", meaningful brackets kept, quoted titles, "- Topic" channels, no separator → channel is the artist, never strips everything, noise words inside names left alone |
+| `AudioAnalyzerTest` (6, needs ffmpeg) | integrated loudness within 0.3 LU of ffmpeg `ebur128` (quiet tone, loud noise, mono, 44.1 kHz); ReplayGain relative to −18 LUFS and R128 to −23 in Q7.8; peak; leading/trailing silence found with a margin; nothing to trim and silent files; time ranges |
+| `WebmOpusRemuxerTest` (6, needs ffmpeg) | WebM → Ogg Opus decodes to exactly the same samples (so Ogg CRC, pre-skip and end padding are right — breaking any of them fails it), tags/R128 gain/cover readable, a cover spanning several Ogg pages, cuts at packet boundaries, packet durations from the TOC byte, non-WebM rejected |
+| `Mp3ExporterTest` (3, needs ffmpeg) | 192 kbps with the same loudness and duration as the source, ID3 tags/ReplayGain/cover readable, mono and exact cuts |
+| `CoverGeometryTest` (4) | 16:9 → centre square, letterboxed 4:3 skips the black bars, a dark picture isn't mistaken for bars, largest thumbnail wins |
+| `ProcessingPipelineTest` (9, needs ffmpeg) | end to end over HTTP: Opus with smart title + cover + R128; MP3 with ReplayGain matching ffmpeg; silence trimming without re-encoding; Opus cut; edited tags written; cancelling the tag dialog saves nothing and leaves no temp files; fallbacks (no Opus stream, no decoder, thumbnail 404) never cost the song; smart titles/cover off; Opus audio + video downloads AAC for the MP4, one progress bar over three downloads |
+| `TimeCodesTest` (3) | `m:ss` / `h:mm:ss` / seconds / fractions, invalid input, ranges |
+| `UpdateCheckerTest` (8) | nothing newer, newer extractor than the pinned commit date, release on the pinned day isn't newer, newer app wins the hint, prereleases ignored, HTTP errors/garbage throw, version comparison, once a day |
+| `AudioProcessingOnDeviceTest` (7, **Android emulator, API 29 + 35, in CI**) | MediaCodec decodes AAC and Opus (rate, channels, length); loudness and silence through MediaCodec match ffmpeg; Bitmap cover crop skips letterbox bars; Android reads covers from M4A and MP3 (`getEmbeddedPicture`), Opus tags, MediaExtractor/MediaPlayer accept the Opus/MP3/cut M4A; MediaStore keeps `.opus` / `.mp3` names |
+| `HttpAudioDownloaderTest` (22) | chunked Range download, determinate vs indeterminate progress, server ignoring Range, resume after mid-chunk disconnect, 403 / 429, persistent network failure, empty responses, prompt cancel of a stalled read; request styles: NewPipe player style (POST, `range`/`rn` parameters, headers), fallback after a refusal that sticks for later chunks, a server ignoring the range parameter detected, refusal by every style names them, fallback for unknown sizes; parallel: same bytes over ≤3 connections, first chunk alone, progress monotonic, one connection by default, 429 drops back to one and finishes, 429 with one connection is a real rate-limit failure, Range-ignoring host falls back, player style with unique `rn` across connections, a refusal moves every connection to the next style once |
 | `AudioDownloadPipelineTest` (10) | phase order, tagged output, temp-file cleanup, extractor error pass-through (no download attempted), untaggable → saved with warning, WebM path, lying/failing storage → STORAGE error, cancel → Cancelled, file-name sanitising |
-| `NewPipeExtractionEngineTest` (10) | NewPipe exception → `FailureReason` mapping keeps the original message; stream choice (original track, M4A over Opus, bitrate, progressive only); "- Topic" cleanup; playlist entries → items (incl. `&list=` URLs), non-downloadable entries, album title prefix; only progressive MP4 video-only streams offered, size from itag data or the "1080p60" label |
+| `NewPipeExtractionEngineTest` (12) | Opus stream choice (original track, highest bitrate, progressive only); NewPipe exception → `FailureReason` mapping keeps the original message; stream choice (original track, M4A over Opus, bitrate, progressive only); "- Topic" cleanup; playlist entries → items (incl. `&list=` URLs), non-downloadable entries, album title prefix; only progressive MP4 video-only streams offered, size from itag data or the "1080p60" label |
 | `LiveYouTubeTest` (6) + `LiveStreamRequestDiagnostic` (1), opt-in: `LIVE_YOUTUBE=1 ./gradlew :engine-newpipe:test --tests '*Live*'` | Real YouTube: resolves a Creative-Commons video, full pipeline to a tagged file, unavailable ID → `UNAVAILABLE`, lists that video's mix and loads a second page, saves a merged ≤480p MP4 (audio + video, and video only) and checks it with ffprobe/ffmpeg; the diagnostic prints which request styles YouTube's stream servers accept. Needs a network YouTube doesn't bot-check (not GitHub's runners). **Run this first when "downloads stopped working"** — it tells you whether YouTube/the extractor broke. |
 
 ### Manual, on a device or emulator
@@ -299,7 +349,29 @@ Use content you're allowed to download, e.g. Blender's *Big Buck Bunny* (CC BY):
     *Play* opens the file. Paste a link you saved before: "Already saved …" appears under the field, and downloading
     it again still works. Force-stop the app and reopen: the history is still there. *Clear* empties it, the files
     stay.
-13. **Robustness extras.** Lock the screen / switch apps mid-download (it continues); rotate during a download (progress
+13. **Advanced settings.** Open the gear icon; every switch shows what it does and survives an app restart; *Reset*
+    restores the defaults. Set **Opus**: the result is `Artist - Title.opus` in `Music/AudioSaver`, plays in the
+    phone's music app with title/artist and the cover. Set **MP3**: the card shows *Encoding MP3…*, the result plays
+    in a basic player and in a car via USB. Back to M4A: the music app shows the **cover** (thumbnail, square, no black
+    bars). Paste a music video titled like "Artist - Song (Official Video)": file and tags are *Artist* / *Song*.
+14. **Cut.** Turn on *Cut start and end*, paste a music video with an intro, enter `0:25` as start: the saved file
+    starts at the music. `2:00` / `1:00` shows "The end must be after the start" and disables the button. Turn on
+    *Trim silence*: a song with silent seconds at the end no longer has them.
+15. **Loudness.** Turn on *Loudness tags*, save a quiet and a loud song, play both in a player with ReplayGain (e.g.
+    Poweramp, foobar2000, Navidrome): similar volume.
+16. **Edit tags.** Turn on *Edit tags before saving*, download a song: the dialog appears while the progress bar
+    keeps moving. Change the album and *Save*: the music app shows that album. Again with *Cancel download*: nothing
+    is saved. Leave the app while the dialog is open: the notification says it's waiting; tapping it brings it back.
+17. **Only new songs.** Download 3 songs of a playlist, paste the playlist again: those 3 are unticked and marked
+    "saved before", the header says "3 already saved, not ticked".
+18. **Parallel chunks.** Turn it on, download a 1080p video: noticeably faster on a fast connection; the file plays.
+19. **Update card.** With a GitHub release newer than the installed version (or a NewPipeExtractor release after
+    2026-10-05), the card appears on the next launch (at most daily); *Dismiss* hides it for that release; turning
+    the check off hides it and stops all requests to GitHub.
+20. **Tablet / dark mode.** On a tablet or in landscape on a foldable: downloader and history side by side, content
+    not stretched across the screen. In dark mode no white flash at launch; on Android 13+ with themed icons on, the
+    launcher icon follows the wallpaper colours.
+21. **Robustness extras.** Lock the screen / switch apps mid-download (it continues); rotate during a download (progress
    survives); deny the notification permission (download still works, just without a notification).
 
 ## Known limitations
@@ -307,7 +379,13 @@ Use content you're allowed to download, e.g. Blender's *Big Buck Bunny* (CC BY):
 - Age-restricted, members-only, kids-only and private videos can't be downloaded (no login, by design).
 - YouTube may answer "Sign in to confirm you're not a bot" for some networks/IPs; the app reports exactly that.
 - Saved M4A keeps YouTube's fragmented MP4 layout (tags and brand fixed up, audio untouched). All common players and
-  taggers handle it; a few very old players may show the duration only after a full scan.
+  taggers handle it; a few very old players may show the duration only after a full scan. (A cut M4A is rewritten as
+  a regular MP4.)
+- MP3 export re-encodes with a pure-Java LAME: a 4-minute song takes several seconds on a mid-range phone, longer on
+  old ones. M4A or Opus are instant and lossless with respect to what YouTube serves.
+- Cuts of M4A/Opus snap to codec frames (≈20–23 ms); that's inaudible, but not sample-exact.
+- The update check can only see releases published on GitHub (tags `v*` in this repository); a self-built APK with a
+  higher version simply never sees a card.
 - Video: H.264 only, so at most 1080p (YouTube serves higher resolutions only as VP9/AV1).
 - Not yet verified against real YouTube: the request style YouTube's stream servers accept (see above; the app
   falls back automatically) and very long videos. Run the live tests from a home network to confirm.

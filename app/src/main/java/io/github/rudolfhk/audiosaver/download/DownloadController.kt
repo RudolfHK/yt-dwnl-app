@@ -17,6 +17,7 @@ import io.github.rudolfhk.audiosaver.core.pipeline.BatchState
 import io.github.rudolfhk.audiosaver.core.pipeline.DownloadOptions
 import io.github.rudolfhk.audiosaver.core.pipeline.DownloadState
 import io.github.rudolfhk.audiosaver.core.pipeline.ItemStatus
+import io.github.rudolfhk.audiosaver.core.pipeline.Processing
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -34,6 +35,8 @@ class DownloadController(
     val pipeline: AudioDownloadPipeline,
     val batchDownloader: BatchDownloader,
     val history: HistoryLog,
+    /** Pending "edit tags before saving" dialogs. */
+    val reviews: TagReviewQueue,
     /** Outlives screens and the service: history writes must finish even if both go away. */
     private val appScope: CoroutineScope,
 ) {
@@ -44,7 +47,11 @@ class DownloadController(
     @Volatile var lastOptions: DownloadOptions = DownloadOptions.AUDIO_ONLY
         private set
 
-    @Volatile private var runningOptions: DownloadOptions = DownloadOptions.AUDIO_ONLY
+    /** What the running single download asked for; the service reads it (too much for Intent extras). */
+    @Volatile internal var runningOptions: DownloadOptions = DownloadOptions.AUDIO_ONLY
+        private set
+
+    @Volatile private var pendingBatchProcessing: Processing = Processing()
 
     private val _state = MutableStateFlow<DownloadState>(DownloadState.Idle)
     val state: StateFlow<DownloadState> = _state.asStateFlow()
@@ -67,18 +74,20 @@ class DownloadController(
             // Flip state before the service spins up so the UI reacts on the same frame.
             _state.value = DownloadState.Resolving(videoId)
         }
-        return startService(context, DownloadService.startIntent(context, videoId, options)) { message ->
+        return startService(context, DownloadService.startIntent(context, videoId)) { message ->
             publish(DownloadState.Failed(videoId, FailureReason.UNKNOWN, message))
         }
     }
 
-    fun startBatch(context: Context, request: BatchRequest): Boolean {
+    fun startBatch(context: Context, request: BatchRequest, processing: Processing = Processing()): Boolean {
         if (request.entries.isEmpty()) return false
         synchronized(this) {
             if (isBusy) return false
             _state.value = DownloadState.Idle
             batchRun++
             pendingBatch = request
+            pendingBatchProcessing = BatchDownloader.forBatch(processing)
+            lastBatchProcessing = pendingBatchProcessing
             _batch.value = BatchState(
                 request.title,
                 request.kind,
@@ -125,7 +134,13 @@ class DownloadController(
             false
         }
 
-    internal fun takePendingBatch(): BatchRequest? = synchronized(this) { pendingBatch.also { pendingBatch = null } }
+    /** The settings the last batch ran with, so "Retry failed" repeats them. */
+    @Volatile var lastBatchProcessing: Processing = Processing()
+        private set
+
+    internal fun takePendingBatch(): Pair<BatchRequest, Processing>? = synchronized(this) {
+        pendingBatch?.let { it to pendingBatchProcessing }.also { pendingBatch = null }
+    }
 
     internal fun attach(job: Job) {
         this.job = job
@@ -153,6 +168,7 @@ class DownloadController(
         is DownloadState.Downloading -> state.videoId
         is DownloadState.Saving -> state.videoId
         is DownloadState.Merging -> state.videoId
+        is DownloadState.Processing -> state.videoId
         is DownloadState.Done -> state.videoId
         is DownloadState.Failed -> state.videoId
         is DownloadState.Cancelled -> state.videoId

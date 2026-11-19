@@ -2,6 +2,8 @@ name: Build
 
 on:
   push:
+    branches: ["**"]
+    tags: ["v*"]
   pull_request:
   workflow_dispatch:
 
@@ -113,3 +115,48 @@ jobs:
         with:
           name: android-device-report-api${{ matrix.api-level }}
           path: app/build/reports/androidTests/connected/**
+
+  # A version tag (v1.2, v1.2.3) publishes a release APK. The app's update check compares its own
+  # version with the latest release here, and tells users when a newer NewPipeExtractor is out.
+  # Signed with the release key when the AUDIOSAVER_KEYSTORE_BASE64 / _PASSWORD / KEY_ALIAS /
+  # KEY_PASSWORD secrets exist, otherwise with a debug key (fine for personal installs).
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+      - name: Set up JDK
+        uses: actions/setup-java@v5
+        with:
+          java-version: 21
+          distribution: temurin
+          cache: gradle
+      - name: Release keystore (optional)
+        env:
+          KEYSTORE_BASE64: ${{ secrets.AUDIOSAVER_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+            echo "AUDIOSAVER_KEYSTORE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+          else
+            echo "No release keystore secret: signing with a debug key."
+          fi
+      - name: Build release APK
+        env:
+          AUDIOSAVER_VERSION_NAME: ${{ github.ref_name }}
+          AUDIOSAVER_VERSION_CODE: ${{ github.run_number }}
+          AUDIOSAVER_KEYSTORE_PASSWORD: ${{ secrets.AUDIOSAVER_KEYSTORE_PASSWORD }}
+          AUDIOSAVER_KEY_ALIAS: ${{ secrets.AUDIOSAVER_KEY_ALIAS }}
+          AUDIOSAVER_KEY_PASSWORD: ${{ secrets.AUDIOSAVER_KEY_PASSWORD }}
+        run: |
+          export AUDIOSAVER_VERSION_NAME="${AUDIOSAVER_VERSION_NAME#v}"
+          ./gradlew :app:assembleRelease --stacktrace
+          cp app/build/outputs/apk/release/app-release.apk "AudioSaver-${AUDIOSAVER_VERSION_NAME}.apk"
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: AudioSaver-*.apk
+          generate_release_notes: true

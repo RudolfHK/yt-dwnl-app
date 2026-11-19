@@ -27,8 +27,21 @@ configure<ApplicationExtension> {
             version = release(37)
         }
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        versionCode = 1
-        versionName = "1.0"
+        // The release workflow sets these from the git tag (v1.2 -> "1.2") and the run number; the
+        // update check compares versionName with the latest GitHub release.
+        versionCode = providers.environmentVariable("AUDIOSAVER_VERSION_CODE").orNull?.toInt() ?: 1
+        versionName = providers.environmentVariable("AUDIOSAVER_VERSION_NAME").orNull ?: "1.0"
+    }
+
+    // Release signing only when a keystore is provided (CI secrets); otherwise the debug key.
+    val keystore = providers.environmentVariable("AUDIOSAVER_KEYSTORE").orNull
+    if (keystore != null) {
+        signingConfigs.create("release") {
+            storeFile = file(keystore)
+            storePassword = providers.environmentVariable("AUDIOSAVER_KEYSTORE_PASSWORD").orNull
+            keyAlias = providers.environmentVariable("AUDIOSAVER_KEY_ALIAS").orNull
+            keyPassword = providers.environmentVariable("AUDIOSAVER_KEY_PASSWORD").orNull
+        }
     }
 
     buildTypes {
@@ -36,9 +49,9 @@ configure<ApplicationExtension> {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            // No release keystore in the repo: sign with the debug key so `assembleRelease` yields an
-            // installable APK for personal use. Replace with your own signingConfig to publish.
-            signingConfig = signingConfigs.getByName("debug")
+            // No release keystore in the repo: without the CI secrets, sign with the debug key so
+            // `assembleRelease` still yields an installable APK for personal use.
+            signingConfig = signingConfigs.getByName(if (keystore != null) "release" else "debug")
         }
     }
 

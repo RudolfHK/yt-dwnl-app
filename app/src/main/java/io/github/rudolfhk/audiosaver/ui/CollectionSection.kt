@@ -66,7 +66,12 @@ internal fun LazyListScope.collectionSection(state: MainUiState, actions: MainAc
             val listing = c.listing
             item { ListingHeader(listing, actions) }
             items(listing.items, key = { it.videoId.value }) { item ->
-                SongRow(item, checked = item.videoId in listing.selected, onToggle = { actions.onToggle(item.videoId) })
+                SongRow(
+                    item,
+                    checked = item.videoId in listing.selected,
+                    savedBefore = listing.wasSavedBefore(item.videoId),
+                    onToggle = { actions.onToggle(item.videoId) },
+                )
             }
             item { LoadMoreFooter(c, actions) }
         }
@@ -87,12 +92,19 @@ private fun ListingHeader(listing: CollectionListing, actions: MainActions) {
                 Text(stringResource(if (listing.allSelected) R.string.select_none else R.string.select_all))
             }
         }
+        if (listing.savedBeforeCount > 0) {
+            Text(
+                stringResource(R.string.saved_before_count, listing.savedBeforeCount),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.tertiary,
+            )
+        }
         HorizontalDivider()
     }
 }
 
 @Composable
-private fun SongRow(item: CollectionItem, checked: Boolean, onToggle: () -> Unit) {
+private fun SongRow(item: CollectionItem, checked: Boolean, savedBefore: Boolean, onToggle: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -100,7 +112,7 @@ private fun SongRow(item: CollectionItem, checked: Boolean, onToggle: () -> Unit
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Checkbox(checked = checked && item.available, onCheckedChange = { onToggle() }, enabled = item.available)
-        SongText(item, Modifier.weight(1f), dimmed = !item.available)
+        SongText(item, Modifier.weight(1f), dimmed = !item.available, status = if (savedBefore) stringResource(R.string.saved_before) else null)
     }
 }
 
@@ -197,6 +209,7 @@ private fun phaseText(state: DownloadState): String = when (state) {
     is DownloadState.Downloading -> state.fraction?.let { stringResource(R.string.percent, (it * 100).toInt()) }
         ?: stringResource(R.string.progress_unknown, formatBytes(state.bytesDownloaded))
     is DownloadState.Saving -> stringResource(R.string.phase_saving)
+    is DownloadState.Processing -> stringResource(state.step.label)
     else -> ""
 }
 

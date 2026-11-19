@@ -17,7 +17,15 @@ import io.github.rudolfhk.audiosaver.core.pipeline.BatchState
 import io.github.rudolfhk.audiosaver.core.pipeline.DownloadOptions
 import io.github.rudolfhk.audiosaver.core.pipeline.DownloadState
 import io.github.rudolfhk.audiosaver.core.video.VideoQuality
+import io.github.rudolfhk.audiosaver.core.audio.TimeCodes
+import io.github.rudolfhk.audiosaver.core.audio.TimeRange
+import io.github.rudolfhk.audiosaver.core.tag.TrackMetadata
+import io.github.rudolfhk.audiosaver.core.update.UpdateStatus
 import io.github.rudolfhk.audiosaver.download.DownloadController
+import io.github.rudolfhk.audiosaver.download.PendingReview
+import io.github.rudolfhk.audiosaver.settings.AdvancedSettings
+import io.github.rudolfhk.audiosaver.settings.Settings
+import io.github.rudolfhk.audiosaver.update.UpdateManager
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -49,7 +57,60 @@ sealed interface CollectionUi {
 class MainViewModel(
     private val controller: DownloadController,
     private val formats: FormatPreferences,
+    private val advanced: AdvancedSettings,
+    private val updates: UpdateManager,
 ) : ViewModel() {
+
+    val settings: StateFlow<Settings> = advanced.settings
+
+    fun changeSettings(change: (Settings) -> Settings) {
+        val before = advanced.current
+        advanced.update(change)
+        val after = advanced.current
+        if (before.updateCheck && !after.updateCheck) updates.clear()
+        if (!before.updateCheck && after.updateCheck) updates.checkIfDue(true)
+    }
+
+    fun resetSettings() = changeSettings { Settings() }
+
+    // ---------------------------------------------------------------- trim fields (single links)
+
+    private val _trimStart = MutableStateFlow("")
+    val trimStart: StateFlow<String> = _trimStart.asStateFlow()
+    private val _trimEnd = MutableStateFlow("")
+    val trimEnd: StateFlow<String> = _trimEnd.asStateFlow()
+
+    fun setTrimStart(text: String) { _trimStart.value = text }
+    fun setTrimEnd(text: String) { _trimEnd.value = text }
+
+    // ---------------------------------------------------------------- update check
+
+    /** Shown as a card unless dismissed; null when there's nothing new. */
+    val update: StateFlow<UpdateStatus?> = combine(updates.status, updates.dismissedKey, advanced.settings) { status, dismissed, s ->
+        status?.takeIf { s.updateCheck && it.anything && UpdateManager.keyOf(it) != dismissed }
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    /** The hint for EXTRACTOR_BROKEN errors - shown even if the card was dismissed. */
+    val updateHint: StateFlow<String?> = combine(updates.status, advanced.settings) { status, s ->
+        status?.takeIf { s.updateCheck }?.brokenExtractorHint()
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    fun updateSummary(status: UpdateStatus): String? = status.summary(updates.build)
+
+    fun dismissUpdate(status: UpdateStatus) = updates.dismiss(status)
+
+    /** Called when the screen is shown; does nothing unless a day has passed. */
+    fun checkForUpdates() = updates.checkIfDue(advanced.current.updateCheck)
+
+    val buildDescription: String get() = "${updates.build.appVersion} · NewPipeExtractor ${updates.build.extractorVersion}"
+
+    // ---------------------------------------------------------------- tag review
+
+    val pendingReview: StateFlow<PendingReview?> = controller.reviews.pending
+
+    fun answerReview(review: PendingReview, metadata: TrackMetadata?) {
+        controller.reviews.answer(review, metadata)
+    }
 
     // What a single link produces: audio, video or both. Mixes/albums are always saved as audio.
     private val _saveAudio = MutableStateFlow(formats.audio)
@@ -76,11 +137,25 @@ class MainViewModel(
         formats.quality = value
     }
 
-    /** Null when neither format is selected - the download button is disabled then. */
+    /** Null when neither format is selected or the cut is invalid - the download button is disabled then. */
     private fun singleOptions(): DownloadOptions? {
         val video = _videoQuality.value.takeIf { _saveVideo.value }
-        return if (_saveAudio.value || video != null) DownloadOptions(saveAudio = _saveAudio.value, video = video) else null
+        if (!_saveAudio.value && video == null) return null
+        val s = advanced.current
+        val trim = if (s.manualTrim) {
+            try {
+                TimeCodes.range(_trimStart.value, _trimEnd.value)
+            } catch (_: IllegalArgumentException) {
+                return null
+            }
+        } else {
+            TimeRange.ALL
+        }
+        return DownloadOptions(saveAudio = _saveAudio.value, video = video, processing = s.processing(trim))
     }
+
+    /** For retries that don't repeat a specific earlier request: today's settings, no cut, no dialog. */
+    private fun currentProcessing() = advanced.current.processing().copy(trim = TimeRange.ALL, reviewTags = false)
 
     val history: StateFlow<List<HistoryEntry>> = controller.history.entries
 
@@ -142,6 +217,9 @@ class MainViewModel(
         _justThisSong.value = false
         controller.dismissResult()
         if (controller.batch.value?.isActive != true) controller.dismissBatch()
+        // A cut belongs to one video.
+        _trimStart.value = ""
+        _trimEnd.value = ""
     }
 
     /** Text shared from another app (ACTION_SEND). Shared texts often wrap the link in a title. */
@@ -188,7 +266,9 @@ class MainViewModel(
         loadJob = viewModelScope.launch {
             delay(debounceMs)
             _collection.value = try {
-                CollectionUi.Loaded(CollectionListing.of(controller.engine.listCollection(ref)))
+                val page = controller.engine.listCollection(ref)
+                val saved = if (advanced.current.onlyNewSongs) controller.history.savedAudioIds().mapNotNullTo(HashSet()) { id -> runCatching { VideoId.of(id) }.getOrNull() } else emptySet()
+                CollectionUi.Loaded(CollectionListing.of(page, saved))
             } catch (e: AudioSaveException) {
                 CollectionUi.Failed(ref, e.reason, e.detail)
             } catch (e: CancellationException) {
@@ -223,7 +303,7 @@ class MainViewModel(
             is Target.Single -> singleOptions()?.let { controller.start(context, t.videoId, it) }
             is Target.Collection -> {
                 val listing = (_collection.value as? CollectionUi.Loaded)?.listing ?: return
-                controller.startBatch(context, listing.toBatchRequest())
+                controller.startBatch(context, listing.toBatchRequest(), advanced.current.processing())
             }
             Target.None -> Unit
         }
@@ -239,7 +319,7 @@ class MainViewModel(
     fun retryVideo(context: Context, videoId: VideoId) {
         controller.dismissResult()
         val quality = controller.lastOptions.video ?: _videoQuality.value
-        controller.start(context, videoId, DownloadOptions.videoOnly(quality))
+        controller.start(context, videoId, DownloadOptions.videoOnly(quality).copy(processing = controller.lastOptions.processing))
     }
 
     /**
@@ -249,7 +329,7 @@ class MainViewModel(
      */
     fun retryFromHistory(context: Context, entry: HistoryEntry) {
         onInputChanged(entry.watchUrl)
-        controller.start(context, VideoId.of(entry.videoId), entry.retryOptions())
+        controller.start(context, VideoId.of(entry.videoId), entry.retryOptions().copy(processing = currentProcessing()))
     }
 
     fun clearHistory() {
@@ -259,7 +339,7 @@ class MainViewModel(
     fun retryFailed(context: Context) {
         val finished = controller.batch.value?.takeIf { it.finished } ?: return
         val failed = finished.failedEntries.ifEmpty { return }
-        controller.startBatch(context, BatchRequest(finished.title, finished.kind, failed))
+        controller.startBatch(context, BatchRequest(finished.title, finished.kind, failed), controller.lastBatchProcessing)
     }
 
     /** Back from the batch summary to the song list (e.g. to pick more songs). */

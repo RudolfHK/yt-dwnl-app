@@ -14,6 +14,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
@@ -70,6 +72,8 @@ import io.github.rudolfhk.audiosaver.core.pipeline.BatchState
 import io.github.rudolfhk.audiosaver.core.pipeline.DownloadState
 import io.github.rudolfhk.audiosaver.core.pipeline.SavedAudio
 import io.github.rudolfhk.audiosaver.core.pipeline.VideoResult
+import io.github.rudolfhk.audiosaver.core.pipeline.AudioFormat
+import io.github.rudolfhk.audiosaver.core.update.UpdateStatus
 import io.github.rudolfhk.audiosaver.core.video.VideoQuality
 
 /** Everything the screen shows, gathered so the composable has one input instead of ten. */
@@ -86,9 +90,20 @@ data class MainUiState(
     val saveAudio: Boolean = true,
     /** This video is already in the history as saved: a hint, never a block. */
     val alreadySaved: HistoryEntry? = null,
+    val audioFormat: AudioFormat = AudioFormat.M4A,
+    /** "Cut start and end" is on: show the start/end fields for single links. */
+    val trimEnabled: Boolean = false,
+    val trimStart: String = "",
+    val trimEnd: String = "",
+    /** Newer app/extractor found by the update check; null = nothing (or dismissed). */
+    val update: UpdateStatus? = null,
+    val updateSummary: String? = null,
+    /** Added to "YouTube changed something" errors when an update exists. */
+    val updateHint: String? = null,
 ) {
     val anyFormat: Boolean get() = saveAudio || saveVideo
     val busy: Boolean get() = download.isActive || batch?.isActive == true
+    val trimError: String? get() = if (trimEnabled && saveAudio) trimError(trimStart, trimEnd) else null
 }
 
 interface MainActions {
@@ -110,19 +125,32 @@ interface MainActions {
     fun onSaveVideo(value: Boolean)
     fun onVideoQuality(quality: VideoQuality)
     fun onRetryVideo(videoId: VideoId)
+    fun onTrimStart(text: String) = Unit
+    fun onTrimEnd(text: String) = Unit
+    fun onOpenUpdate(url: String) = Unit
+    fun onDismissUpdate(status: UpdateStatus) = Unit
 }
 
 @Composable
-fun MainScreen(state: MainUiState, actions: MainActions, onOpenHistory: () -> Unit = {}) {
+fun MainScreen(
+    state: MainUiState,
+    actions: MainActions,
+    modifier: Modifier = Modifier,
+    onOpenHistory: () -> Unit = {},
+    onOpenSettings: () -> Unit = {},
+    /** False when the history is already shown next to this screen (tablets). */
+    showHistoryButton: Boolean = true,
+) {
     val context = LocalContext.current
     val isCollection = state.target is Target.Collection
     val loadedListing = (state.collection as? CollectionUi.Loaded)?.listing
-    val canDownloadSingle = state.target is Target.Single && !state.busy && state.anyFormat
+    val canDownloadSingle = state.target is Target.Single && !state.busy && state.anyFormat && state.trimError == null
     var showInfo by rememberSaveable { mutableStateOf(false) }
 
     if (showInfo) InfoDialog(onDismiss = { showInfo = false })
 
     Scaffold(
+        modifier = modifier,
         bottomBar = {
             // Pinned, so "Download 25 songs" stays reachable at the bottom of a long mix.
             if (isCollection && loadedListing != null && state.batch == null) {
@@ -131,6 +159,9 @@ fun MainScreen(state: MainUiState, actions: MainActions, onOpenHistory: () -> Un
                         onClick = actions::onDownload,
                         enabled = loadedListing.selectedCount > 0 && !state.busy,
                         modifier = Modifier
+                            .fillMaxWidth()
+                            .wrapContentWidth()
+                            .widthIn(max = CONTENT_MAX_WIDTH)
                             .fillMaxWidth()
                             .navigationBarsPadding()
                             .padding(horizontal = 20.dp, vertical = 12.dp),
@@ -144,7 +175,10 @@ fun MainScreen(state: MainUiState, actions: MainActions, onOpenHistory: () -> Un
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(padding),
+                .padding(padding)
+                .wrapContentWidth()
+                .widthIn(max = CONTENT_MAX_WIDTH)
+                .fillMaxWidth(),
             contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
@@ -155,13 +189,23 @@ fun MainScreen(state: MainUiState, actions: MainActions, onOpenHistory: () -> Un
                         style = MaterialTheme.typography.headlineMedium,
                         modifier = Modifier.weight(1f),
                     )
-                    IconButton(onClick = onOpenHistory) {
-                        Icon(painterResource(R.drawable.ic_history), contentDescription = stringResource(R.string.history_button))
+                    if (showHistoryButton) {
+                        IconButton(onClick = onOpenHistory) {
+                            Icon(painterResource(R.drawable.ic_history), contentDescription = stringResource(R.string.history_button))
+                        }
+                    }
+                    IconButton(onClick = onOpenSettings) {
+                        Icon(painterResource(R.drawable.ic_settings), contentDescription = stringResource(R.string.settings_button))
                     }
                     IconButton(onClick = { showInfo = true }) {
                         Icon(painterResource(R.drawable.ic_info), contentDescription = stringResource(R.string.info_button))
                     }
                 }
+            }
+
+            val update = state.update
+            if (update != null && state.updateSummary != null) {
+                item { UpdateCard(update, state.updateSummary, actions::onOpenUpdate) { actions.onDismissUpdate(update) } }
             }
 
             item {
@@ -211,6 +255,7 @@ fun MainScreen(state: MainUiState, actions: MainActions, onOpenHistory: () -> Un
                 item {
                     FormatChooser(
                         enabled = !state.busy,
+                        audioFormat = state.audioFormat,
                         audio = state.saveAudio,
                         video = state.saveVideo,
                         quality = state.videoQuality,
@@ -218,6 +263,14 @@ fun MainScreen(state: MainUiState, actions: MainActions, onOpenHistory: () -> Un
                         onVideo = actions::onSaveVideo,
                         onQuality = actions::onVideoQuality,
                     )
+                }
+                if (state.trimEnabled && state.saveAudio) {
+                    item {
+                        TrimFields(
+                            state.trimStart, state.trimEnd, state.trimError, enabled = !state.busy,
+                            onStart = actions::onTrimStart, onEnd = actions::onTrimEnd,
+                        )
+                    }
                 }
                 item {
                     val label = when {
@@ -230,7 +283,7 @@ fun MainScreen(state: MainUiState, actions: MainActions, onOpenHistory: () -> Un
                     }
                 }
                 item {
-                    StatusCard(state.download, actions)
+                    StatusCard(state.download, actions, state.updateHint)
                 }
             }
 
@@ -279,7 +332,7 @@ private fun ValidationText(input: String, parsed: LinkParseResult, alreadySaved:
 
 @OptIn(ExperimentalLayoutApi::class) // FlowRow; a no-op on Compose versions where it is stable
 @Composable
-private fun StatusCard(state: DownloadState, actions: MainActions) {
+private fun StatusCard(state: DownloadState, actions: MainActions, updateHint: String? = null) {
     val onCancel = actions::onCancel
     val onRetry = actions::onRetry
     if (state is DownloadState.Idle) return
@@ -346,6 +399,12 @@ private fun StatusCard(state: DownloadState, actions: MainActions) {
                     CancelRow(onCancel)
                 }
 
+                is DownloadState.Processing -> {
+                    PhaseHeader(stringResource(state.step.label), subtitle = state.title)
+                    LinearProgressIndicator(Modifier.fillMaxWidth())
+                    CancelRow(onCancel)
+                }
+
                 is DownloadState.Done -> {
                     state.saved?.let { saved ->
                         PhaseHeader("✓ " + stringResource(R.string.saved_title), subtitle = saved.displayName)
@@ -396,6 +455,14 @@ private fun StatusCard(state: DownloadState, actions: MainActions) {
                     SelectionContainer {
                         Text(state.detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onErrorContainer)
                     }
+                    if (updateHint != null && state.reason == FailureReason.EXTRACTOR_BROKEN) {
+                        Text(
+                            updateHint,
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                        )
+                    }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                         Button(onClick = { onRetry(state.videoId) }) { Text(stringResource(R.string.retry)) }
                         if (!state.reason.retryable) {
@@ -437,6 +504,7 @@ private fun FileButtons(saved: SavedAudio, actions: MainActions) {
 @Composable
 private fun FormatChooser(
     enabled: Boolean,
+    audioFormat: AudioFormat,
     audio: Boolean,
     video: Boolean,
     quality: VideoQuality,
@@ -445,7 +513,16 @@ private fun FormatChooser(
     onQuality: (VideoQuality) -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        FormatRow(stringResource(R.string.format_audio), stringResource(R.string.format_audio_hint), audio, enabled, onAudio)
+        val audioHint = when (audioFormat) {
+            AudioFormat.M4A -> R.string.format_audio_hint
+            AudioFormat.OPUS -> R.string.format_audio_hint_opus
+            AudioFormat.MP3 -> R.string.format_audio_hint_mp3
+        }
+        FormatRow(
+            stringResource(R.string.format_audio, audioFormat.label),
+            stringResource(audioHint) + " " + stringResource(R.string.format_change_hint),
+            audio, enabled, onAudio,
+        )
         FormatRow(stringResource(R.string.format_video), stringResource(R.string.format_video_hint), video, enabled, onVideo)
         if (video) {
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(start = 48.dp)) {

@@ -32,3 +32,7 @@
     private void writeObject(java.io.ObjectOutputStream);
     private void readObject(java.io.ObjectInputStream);
 }
+
+# jump3r (MP3 export): its LameEncoder/player front-ends reference javax.sound, which Android lacks.
+# The app only uses the LAME core directly, so those classes are never loaded.
+-dontwarn javax.sound.**

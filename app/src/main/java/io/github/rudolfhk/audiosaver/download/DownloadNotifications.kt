@@ -19,6 +19,7 @@ import io.github.rudolfhk.audiosaver.core.pipeline.DownloadState
 import io.github.rudolfhk.audiosaver.core.pipeline.ItemStatus
 import io.github.rudolfhk.audiosaver.core.pipeline.VideoResult
 import io.github.rudolfhk.audiosaver.ui.formatBytes
+import io.github.rudolfhk.audiosaver.ui.label
 
 internal class DownloadNotifications(private val context: Context) {
 
@@ -68,6 +69,9 @@ internal class DownloadNotifications(private val context: Context) {
                 .setProgress(0, 0, true)
             is DownloadState.Merging -> builder.setContentTitle(state.title)
                 .setContentText(context.getString(R.string.phase_merging))
+                .setProgress(0, 0, true)
+            is DownloadState.Processing -> builder.setContentTitle(state.title)
+                .setContentText(context.getString(state.step.label))
                 .setProgress(0, 0, true)
             else -> builder.setContentTitle(context.getString(R.string.phase_resolving)).setProgress(0, 0, true)
         }

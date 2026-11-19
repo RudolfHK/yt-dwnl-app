@@ -172,6 +172,15 @@ class HistoryTest {
         assertNull(log.lastSaved("nothing"))
     }
 
+    @Test fun `only-new-songs lookup counts saved audio, not failures or video-only saves`() = runBlocking {
+        val videoOnly = entry(3).copy(audio = null, video = FileOutcome.saved(audioFile))
+        val failedThenSaved = listOf(entry(4, HistoryStatus.FAILED), entry(4))
+        val log = HistoryLog(File(tmp.root, "h.jsonl")).apply {
+            load(); add(entry(1)); add(entry(2, HistoryStatus.FAILED)); add(videoOnly); failedThenSaved.forEach { add(it) }
+        }
+        assertEquals(setOf(entry(1).videoId, entry(4).videoId), log.savedAudioIds())
+    }
+
     @Test fun `unknown failure reasons from older versions read back as UNKNOWN`() {
         assertEquals(FailureReason.UNKNOWN, FileOutcome(failureReason = "REASON_FROM_THE_FUTURE").reason)
     }

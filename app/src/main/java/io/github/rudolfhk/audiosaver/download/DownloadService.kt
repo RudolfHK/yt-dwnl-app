@@ -10,10 +10,8 @@ import io.github.rudolfhk.audiosaver.audioSaverApp
 import io.github.rudolfhk.audiosaver.core.engine.FailureReason
 import io.github.rudolfhk.audiosaver.core.link.VideoId
 import io.github.rudolfhk.audiosaver.core.pipeline.BatchState
-import io.github.rudolfhk.audiosaver.core.pipeline.DownloadOptions
 import io.github.rudolfhk.audiosaver.core.pipeline.DownloadState
 import io.github.rudolfhk.audiosaver.core.pipeline.ItemStatus
-import io.github.rudolfhk.audiosaver.core.video.VideoQuality
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -62,7 +60,9 @@ class DownloadService : Service() {
                     return START_NOT_STICKY
                 }
                 timedOut = false
-                val options = optionsFrom(intent)
+                // The full options (format, trim, ...) are handed over by the controller, which set
+                // them just before starting the service.
+                val options = controller.runningOptions
                 job = scope.launch {
                     try {
                         controller.pipeline.run(videoId, options = options) { reported ->
@@ -91,15 +91,16 @@ class DownloadService : Service() {
                     ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
                 )
                 if (job?.isActive == true) return START_NOT_STICKY
-                val request = controller.takePendingBatch()
-                if (request == null) {
+                val pending = controller.takePendingBatch()
+                if (pending == null) {
                     finish(controller.state.value)
                     return START_NOT_STICKY
                 }
                 timedOut = false
                 job = scope.launch {
                     try {
-                        controller.batchDownloader.run(request) { reported ->
+                        val (request, processing) = pending
+                        controller.batchDownloader.run(request, processing) { reported ->
                             val state = if (reported.finished && timedOut) withTimeLimitReason(reported) else reported
                             controller.publishBatch(state)
                             if (!state.finished) notifications.updateBatchProgress(state)
@@ -156,21 +157,11 @@ class DownloadService : Service() {
             "Android stopped the background download (foreground-service time limit reached)."
         const val ACTION_CANCEL = "io.github.rudolfhk.audiosaver.CANCEL"
         private const val EXTRA_VIDEO_ID = "videoId"
-        private const val EXTRA_SAVE_AUDIO = "saveAudio"
-        private const val EXTRA_VIDEO_QUALITY = "videoQuality"
 
-        fun startIntent(context: Context, videoId: VideoId, options: DownloadOptions): Intent =
+        fun startIntent(context: Context, videoId: VideoId): Intent =
             Intent(context, DownloadService::class.java)
                 .setAction(ACTION_START)
                 .putExtra(EXTRA_VIDEO_ID, videoId.value)
-                .putExtra(EXTRA_SAVE_AUDIO, options.saveAudio)
-                .putExtra(EXTRA_VIDEO_QUALITY, options.video?.name)
-
-        private fun optionsFrom(intent: Intent): DownloadOptions {
-            val video = intent.getStringExtra(EXTRA_VIDEO_QUALITY)?.let(VideoQuality::fromName)
-            val saveAudio = intent.getBooleanExtra(EXTRA_SAVE_AUDIO, true) || video == null
-            return DownloadOptions(saveAudio = saveAudio, video = video)
-        }
 
         /** The batch itself is handed over through [DownloadController]; it can be too big for an Intent. */
         fun startBatchIntent(context: Context): Intent =

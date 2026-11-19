@@ -10,6 +10,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -52,7 +54,13 @@ private enum class HistoryFilter { ALL, SAVED, FAILED }
 
 /** Every finished download, newest first: what was saved where, and what failed and why. */
 @Composable
-fun HistoryScreen(entries: List<HistoryEntry>, actions: HistoryActions) {
+fun HistoryScreen(
+    entries: List<HistoryEntry>,
+    actions: HistoryActions,
+    modifier: Modifier = Modifier,
+    /** False in the tablet layout, where the history is a pane next to the main screen. */
+    showBack: Boolean = true,
+) {
     var filterName by rememberSaveable { mutableStateOf(HistoryFilter.ALL.name) }
     val filter = HistoryFilter.valueOf(filterName)
     var confirmClear by rememberSaveable { mutableStateOf(false) }
@@ -76,15 +84,15 @@ fun HistoryScreen(entries: List<HistoryEntry>, actions: HistoryActions) {
         )
     }
 
-    Scaffold { padding ->
+    Scaffold(modifier = modifier) { padding ->
         LazyColumn(
-            modifier = Modifier.fillMaxSize().padding(padding),
+            modifier = Modifier.fillMaxSize().padding(padding).wrapContentWidth().widthIn(max = CONTENT_MAX_WIDTH).fillMaxWidth(),
             contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             item {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    TextButton(onClick = actions::onClose) { Text(stringResource(R.string.back)) }
+                    if (showBack) TextButton(onClick = actions::onClose) { Text(stringResource(R.string.back)) }
                     Text(stringResource(R.string.history_title), style = MaterialTheme.typography.headlineMedium, modifier = Modifier.weight(1f))
                     if (entries.isNotEmpty()) {
                         TextButton(onClick = { confirmClear = true }) { Text(stringResource(R.string.history_clear)) }

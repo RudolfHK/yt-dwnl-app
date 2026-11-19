@@ -8,7 +8,10 @@ import io.github.rudolfhk.audiosaver.core.opus.WebmOpusRemuxer
 import io.github.rudolfhk.audiosaver.core.tag.Mp4Tagger
 import io.github.rudolfhk.audiosaver.core.tag.TrackMetadata
 import io.github.rudolfhk.audiosaver.core.video.DashMp4Muxer
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.runInterruptible
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.ensureActive
 import java.io.File
 import java.io.IOException
@@ -38,6 +41,14 @@ internal class AudioFinisher(private val toolkit: Toolkit, private val workDir: 
         metadata: TrackMetadata,
         processing: Processing,
         onStep: (ProcessingStep) -> Unit,
+    ): FinishedAudio = withContext(Dispatchers.IO) { finishHere(raw, container, metadata, processing, onStep) }
+
+    private suspend fun finishHere(
+        raw: File,
+        container: AudioContainer,
+        metadata: TrackMetadata,
+        processing: Processing,
+        onStep: (ProcessingStep) -> Unit,
     ): FinishedAudio {
         val warnings = mutableListOf<String>()
         val decoder = toolkit.decoder
@@ -51,7 +62,7 @@ internal class AudioFinisher(private val toolkit: Toolkit, private val workDir: 
                 onStep(ProcessingStep.ANALYZING)
                 try {
                     val analyzer = AudioAnalyzer()
-                    decoder.decode(raw, analyzer)
+                    runInterruptible { decoder.decode(raw, analyzer) }
                     currentCoroutineContext().ensureActive()
                     if (processing.trimSilence) {
                         range = range.intersect(analyzer.audibleRange()) ?: range
@@ -61,6 +72,7 @@ internal class AudioFinisher(private val toolkit: Toolkit, private val workDir: 
                         if (md.replayGain == null) warnings += "No loudness tag: the track is silent."
                     }
                 } catch (e: IOException) {
+                    currentCoroutineContext().ensureActive() // an interrupted cancel surfaces as an IOException
                     warnings += "Couldn't analyse the audio (${e.message}); saved without loudness/silence processing."
                 }
             }
@@ -85,10 +97,11 @@ internal class AudioFinisher(private val toolkit: Toolkit, private val workDir: 
                 onStep(ProcessingStep.ENCODING_MP3)
                 val out = File(workDir, raw.nameWithoutExtension + ".mp3")
                 try {
-                    Mp3Exporter.export(raw, decoder!!, out, md, range)
+                    runInterruptible { Mp3Exporter.export(raw, decoder!!, out, md, range) }
                     currentCoroutineContext().ensureActive()
                     FinishedAudio(out, "mp3", "audio/mpeg", md, warnings)
                 } catch (e: IOException) {
+                    currentCoroutineContext().ensureActive() // an interrupted cancel surfaces as an IOException
                     warnings += "MP3 encoding failed (${e.message}); saved in YouTube's original format instead."
                     finishOriginal(raw, container, md, range, warnings, onStep)
                 }
@@ -110,9 +123,10 @@ internal class AudioFinisher(private val toolkit: Toolkit, private val workDir: 
             onStep(ProcessingStep.REMUXING_OPUS)
             val out = File(workDir, raw.nameWithoutExtension + ".opus")
             return try {
-                WebmOpusRemuxer.remux(raw, out, md, range)
+                runInterruptible { WebmOpusRemuxer.remux(raw, out, md, range) }
                 FinishedAudio(out, "opus", "audio/ogg", md, warnings)
             } catch (e: IOException) {
+                currentCoroutineContext().ensureActive() // an interrupted cancel surfaces as an IOException
                 warnings += "Saved as WebM without embedded tags: ${e.message}"
                 FinishedAudio(raw, container.extension, container.mimeType, md, warnings)
             }
@@ -121,18 +135,20 @@ internal class AudioFinisher(private val toolkit: Toolkit, private val workDir: 
         if (!range.isWholeTrack) {
             val trimmed = File(workDir, raw.nameWithoutExtension + ".trimmed.m4a")
             try {
-                DashMp4Muxer.trimAudio(raw, trimmed, range)
+                runInterruptible { DashMp4Muxer.trimAudio(raw, trimmed, range) }
                 source = trimmed
             } catch (e: IOException) {
+                currentCoroutineContext().ensureActive() // an interrupted cancel surfaces as an IOException
                 warnings += "Couldn't trim (${e.message}); saved the whole track."
             }
         }
         currentCoroutineContext().ensureActive()
         val tagged = File(workDir, raw.nameWithoutExtension + ".tagged.m4a")
         return try {
-            Mp4Tagger.tag(source, tagged, md)
+            runInterruptible { Mp4Tagger.tag(source, tagged, md) }
             FinishedAudio(tagged, "m4a", container.mimeType, md, warnings)
         } catch (e: IOException) {
+            currentCoroutineContext().ensureActive() // an interrupted cancel surfaces as an IOException
             warnings += "Saved without embedded tags: ${e.message}"
             FinishedAudio(source, "m4a", container.mimeType, md, warnings)
         }

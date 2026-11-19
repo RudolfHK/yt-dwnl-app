@@ -26,8 +26,11 @@
     <string name="no_player">No app installed that can play %1$s files.</string>
     <string name="no_file_manager">No file manager could open the folder. The file is in %1$s.</string>
 
-    <string name="format_audio">Audio (M4A)</string>
+    <string name="format_audio">Audio (%1$s)</string>
     <string name="format_audio_hint">YouTube\'s own AAC audio, tagged, saved to Music/AudioSaver. Not MP3: no re-encoding, no quality loss.</string>
+    <string name="format_audio_hint_opus">YouTube\'s Opus audio (about 160 kbps), tagged, saved to Music/AudioSaver. No re-encoding; needs a newer player.</string>
+    <string name="format_audio_hint_mp3">Re-encoded on the phone to MP3 (192 kbps) for older players. Slower and slightly lower quality.</string>
+    <string name="format_change_hint">Change the audio format in Advanced settings.</string>
     <string name="format_video">Video (MP4)</string>
     <string name="format_video_hint">Picture and sound merged on the phone, saved to Movies/AudioSaver. Videos can be large.</string>
     <string name="format_none">Pick audio, video or both.</string>
@@ -122,6 +125,69 @@
         <item>Own code for link checking, chunked downloading and M4A tagging (no FFmpeg)</item>
     </string-array>
     <string name="info_license">Licensed under GPL-3.0-or-later, as required by NewPipeExtractor.</string>
+
+    <!-- Processing after the download -->
+    <string name="phase_waiting_tags">Waiting for you to confirm the tags…</string>
+    <string name="phase_analyzing">Measuring loudness and silence…</string>
+    <string name="phase_encoding_mp3">Encoding MP3…</string>
+    <string name="phase_remuxing_opus">Writing the Opus file…</string>
+
+    <!-- Trim -->
+    <string name="trim_title">Cut</string>
+    <string name="trim_start">Start (m:ss)</string>
+    <string name="trim_end">End (m:ss)</string>
+    <string name="trim_hint">Leave empty for the whole track. Applies to the audio file only.</string>
+
+    <!-- Tag review dialog -->
+    <string name="review_title">Check the tags</string>
+    <string name="review_video_title">From: %1$s</string>
+    <string name="review_field_title">Title</string>
+    <string name="review_field_artist">Artist</string>
+    <string name="review_field_album">Album</string>
+    <string name="review_save">Save</string>
+    <string name="review_cancel">Cancel download</string>
+    <string name="review_downloading">The download carries on while you edit.</string>
+    <string name="review_title_required">The title can\'t be empty</string>
+
+    <!-- Only new songs -->
+    <string name="saved_before">saved before</string>
+    <string name="saved_before_count">%1$d already saved, not ticked</string>
+
+    <!-- Update card -->
+    <string name="update_title">Update available</string>
+    <string name="update_open">Open release</string>
+    <string name="update_dismiss">Dismiss</string>
+
+    <!-- Advanced settings -->
+    <string name="settings_button">Advanced settings</string>
+    <string name="settings_title">Advanced settings</string>
+    <string name="settings_reset">Reset</string>
+    <string name="settings_section_audio">Audio quality and format</string>
+    <string name="settings_format">Audio format</string>
+    <string name="settings_format_m4a">M4A (AAC) - plays everywhere, no re-encoding. Default.</string>
+    <string name="settings_format_opus">Opus - YouTube\'s higher-quality stream (about 160 kbps) as a tagged .opus file. Needs a newer player.</string>
+    <string name="settings_format_mp3">MP3 - re-encoded on the phone (192 kbps) for old car stereos and players. Slower, slightly lower quality.</string>
+    <string name="settings_trim">Cut start and end</string>
+    <string name="settings_trim_hint">Shows start/end fields for single links, e.g. to skip a music video\'s intro. Cuts at audio frame boundaries, no re-encoding.</string>
+    <string name="settings_silence">Trim silence</string>
+    <string name="settings_silence_hint">Removes silence at the start and end automatically. Also for mixes and albums.</string>
+    <string name="settings_replaygain">Loudness tags (ReplayGain)</string>
+    <string name="settings_replaygain_hint">Measures each song (EBU R128) and writes ReplayGain tags, so songs from different videos play at similar volume in players that support it. The audio itself is unchanged.</string>
+    <string name="settings_section_tags">Metadata and tagging</string>
+    <string name="settings_cover">Cover art</string>
+    <string name="settings_cover_hint">Embeds the video thumbnail, cropped square, as album art.</string>
+    <string name="settings_titles">Smart titles</string>
+    <string name="settings_titles_hint">Splits "Artist - Song (Official Video)" into artist and title and removes "(Official Video)", "[HD]" and the like.</string>
+    <string name="settings_review">Edit tags before saving</string>
+    <string name="settings_review_hint">Single links: a dialog to correct title, artist and album while the download runs.</string>
+    <string name="settings_section_collections">Mixes, albums and playlists</string>
+    <string name="settings_only_new">Only new songs</string>
+    <string name="settings_only_new_hint">When re-opening a playlist, only songs not already saved (per the history) are ticked.</string>
+    <string name="settings_section_downloads">Downloads and reliability</string>
+    <string name="settings_parallel">Parallel chunk downloads</string>
+    <string name="settings_parallel_hint">Fetches big video files over up to 3 connections. Drops back to one if YouTube rate-limits.</string>
+    <string name="settings_updates">Check for updates</string>
+    <string name="settings_updates_hint">Once a day, asks GitHub (api.github.com) whether a newer app build or NewPipeExtractor release exists. Nothing about you or your downloads is sent.</string>
 
     <string name="notification_channel">Downloads</string>
     <string name="notification_channel_description">Progress of the current audio download</string>

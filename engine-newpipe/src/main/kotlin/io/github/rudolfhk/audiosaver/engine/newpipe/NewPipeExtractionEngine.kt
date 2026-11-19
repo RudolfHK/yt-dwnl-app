@@ -179,6 +179,9 @@ class NewPipeExtractionEngine(
         /** Keep in sync with gradle/libs.versions.toml - only used in error messages. */
         const val EXTRACTOR_VERSION = "65cabc2 (dev, 2026-10-05)"
 
+        /** Date of that commit: the update check treats extractor releases after it as newer. */
+        const val EXTRACTOR_DATE = "2026-10-05"
+
         @Volatile private var initialized = false
 
         @Synchronized
