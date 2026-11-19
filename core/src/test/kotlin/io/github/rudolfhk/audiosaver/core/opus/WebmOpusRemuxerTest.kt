@@ -38,10 +38,22 @@ class WebmOpusRemuxerTest {
         album = "An Album", trackNumber = 3, trackTotal = 9, replayGain = ReplayGain(loudnessLufs = -9.0, peak = 0.9),
     )
 
+    /**
+     * Every decoded 16-bit sample identical (what a player outputs). Not ffmpeg's float MD5: since
+     * ffmpeg 8 the WebM path starts at a negative timestamp (CodecDelay) and the float output of the
+     * two demuxer paths is no longer bit-identical, although length and samples are.
+     */
     private fun assertSameAudio(webm: File, ogg: File) {
-        if (FfmpegTools.decodedMd5(webm) != FfmpegTools.decodedMd5(ogg, "a:0")) {
-            kotlin.test.fail("decoded audio differs: " + FfmpegTools.explainDecodeDifference(webm, ogg))
-        }
+        val expected = FfmpegTools.decodedPcm(webm)
+        val actual = FfmpegTools.decodedPcm(ogg)
+        if (expected.contentEquals(actual)) return
+        val n = minOf(expected.size, actual.size)
+        val diffs = (0 until n).filter { expected[it] != actual[it] }
+        val maxDiff = diffs.maxOfOrNull { abs(expected[it] - actual[it]) }
+        kotlin.test.fail(
+            "decoded audio differs: ${diffs.size} of $n samples, first at ${diffs.firstOrNull()}, last at ${diffs.lastOrNull()}, " +
+                "max difference $maxDiff; " + FfmpegTools.explainDecodeDifference(webm, ogg),
+        )
     }
 
     @Test fun `remuxed audio decodes to exactly the same samples`() {
