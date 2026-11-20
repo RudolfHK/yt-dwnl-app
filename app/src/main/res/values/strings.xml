@@ -50,7 +50,10 @@
     <string name="history_empty_filter">Nothing in this list.</string>
     <string name="history_clear">Clear</string>
     <string name="history_clear_title">Clear the history?</string>
-    <string name="history_clear_text">This removes the list only. Saved music and videos stay on the phone.</string>
+    <plurals name="history_clear_text">
+        <item quantity="one">This removes the only entry from the list. It can\'t be undone. Your saved music and videos stay on the phone.</item>
+        <item quantity="other">This removes all %1$d entries from the list. It can\'t be undone. Your saved music and videos stay on the phone.</item>
+    </plurals>
     <string name="history_clear_confirm">Clear history</string>
     <string name="history_privacy">The history is stored only on this phone (newest 1000 downloads) and never leaves it.</string>
     <string name="download_with_video">Download audio + video</string>
@@ -89,15 +92,22 @@
     <string name="notice_body">Only download content you have the right to: your own uploads, content under a licence that allows it (e.g. Creative Commons), or where personal copies are permitted by your local law. Respect creators and YouTube\'s terms. This app does not bypass paid or DRM-protected content.</string>
 
     <string name="info_button">About this app</string>
-    <string name="info_title">About Audio Saver</string>
-    <string name="info_close">Close</string>
+        <string name="info_close">Close</string>
+    <string name="help_button">Help</string>
+    <string name="help_title">Help</string>
+    <string name="about_version">Version %1$s · built %2$s</string>
+    <string name="about_tagline">Paste or share a YouTube link, get the audio (and optionally the video) in your phone\'s Music folder. No account, no server in between.</string>
+    <string name="about_engine">Extraction engine</string>
+    <string name="about_own_code">Link parsing, chunked downloading, MP4/Opus/MP3 tagging, MP4 merging and loudness analysis are this app\'s own code (no FFmpeg).</string>
+    <string name="about_copyright">© %1$s RudolfHK · free software under GPL-3.0-or-later, as required by NewPipeExtractor.</string>
+    <string name="about_github">Source code on GitHub</string>
     <string name="info_how_title">How a download works</string>
     <string-array name="info_how_steps">
         <item>Checks the link on your phone (no network) and pulls out the 11-character video ID. For a mix, album or playlist link it lists the songs instead and you tick the ones you want; they are then downloaded one after another, each exactly like a single song.</item>
         <item>Asks YouTube directly for the video\'s details (title, uploader, year) and its list of audio-only streams, the same way the YouTube website does. No account, no login, no server in between.</item>
-        <item>Picks the best original-language M4A stream (AAC, about 128 kbps). If there is none, it falls back to Opus in WebM.</item>
+        <item>Picks the best original-language audio stream: AAC (about 128 kbps) for M4A and MP3, or YouTube\'s Opus stream (about 160 kbps) if you chose Opus in Advanced settings.</item>
         <item>Downloads that stream straight from YouTube\'s servers in resumable chunks, in a background service so it keeps going when you leave the app.</item>
-        <item>Writes title, artist, year and the source link into the file as tags. The audio itself is never re-encoded, so it stays exactly as YouTube serves it.</item>
+        <item>Writes title, artist, year, the source link and the cover art into the file as tags. M4A and Opus are never re-encoded, so they stay exactly as YouTube serves them; MP3 is encoded on the phone. Optional extras (cut, silence trimming, loudness tags, editing the tags first) are in Advanced settings (gear icon).</item>
         <item>Saves it to Music/AudioSaver (album songs to Music/AudioSaver/Album name, with album and track number tags) through Android\'s MediaStore, so no storage permission is needed, then checks that the saved file is complete.</item>
         <item>For a single video you choose what to save: Audio (M4A), Video (MP4) or both. For a video it also downloads YouTube\'s H.264 picture stream (up to the quality you pick, at most 1080p) and merges it with the audio into an MP4 on the phone - again without re-encoding. With both selected the audio is saved first, so a failed video never costs you the song. Mixes, albums and playlists are saved as audio.</item>
         <item>Every finished download - saved, partly saved or failed, with the reason - goes into the History (clock icon), stored only on the phone.</item>
@@ -114,17 +124,7 @@
     </string-array>
     <string name="info_errors_report">If an error keeps happening, long-press the message on the error card to copy it into a bug report.</string>
 
-    <string name="info_libs_title">Built with</string>
-    <string-array name="info_libs">
-        <item>NewPipeExtractor (TeamNewPipe): reads video details and stream links from YouTube</item>
-        <item>OkHttp (Square): HTTP client for the extractor and the download</item>
-        <item>Kotlin and kotlinx.coroutines: language and background work</item>
-        <item>Jetpack Compose with Material 3: the user interface</item>
-        <item>AndroidX Core, Activity and Lifecycle: Android app plumbing</item>
-        <item>Android desugar_jdk_libs: newer Java APIs on Android 10 to 12</item>
-        <item>Own code for link checking, chunked downloading and M4A tagging (no FFmpeg)</item>
-    </string-array>
-    <string name="info_license">Licensed under GPL-3.0-or-later, as required by NewPipeExtractor.</string>
+    <string name="info_libs_title">Libraries</string>
 
     <!-- Processing after the download -->
     <string name="phase_waiting_tags">Waiting for you to confirm the tags…</string>
@@ -162,28 +162,42 @@
     <string name="settings_button">Advanced settings</string>
     <string name="settings_title">Advanced settings</string>
     <string name="settings_reset">Reset</string>
-    <string name="settings_section_audio">Audio quality and format</string>
-    <string name="settings_format">Audio format</string>
-    <string name="settings_format_m4a">M4A (AAC) - plays everywhere, no re-encoding. Default.</string>
-    <string name="settings_format_opus">Opus - YouTube\'s higher-quality stream (about 160 kbps) as a tagged .opus file. Needs a newer player.</string>
-    <string name="settings_format_mp3">MP3 - re-encoded on the phone (192 kbps) for old car stereos and players. Slower, slightly lower quality.</string>
+    <string name="settings_reset_title">Reset all settings?</string>
+    <string name="settings_reset_text">Every advanced setting goes back to its default. Your downloads and the history are not affected.</string>
+    <string name="settings_reset_confirm">Reset</string>
+    <string name="settings_intro">Everything here is optional - the defaults work for most people. Changed settings are highlighted.</string>
+    <string name="settings_intro_changed">Settings that differ from the defaults are highlighted. Reset (top right) restores all defaults.</string>
+    <string name="settings_changed">Changed</string>
+    <string name="settings_section_audio">Audio format</string>
+    <string name="settings_section_audio_sub">What kind of file songs are saved as</string>
+    <string name="settings_section_edit">Cut and loudness</string>
+    <string name="settings_section_edit_sub">Trim intros and silence, even out volume</string>
+    <string name="settings_format_m4a_title">M4A (AAC) · recommended</string>
+    <string name="settings_format_m4a">Plays everywhere. YouTube\'s own audio, saved as-is - no re-encoding, instant.</string>
+    <string name="settings_format_opus_title">Opus · best quality</string>
+    <string name="settings_format_opus">YouTube\'s higher-quality stream (about 160 kbps) as a tagged .opus file, not re-encoded. Needs a newer player; car stereos often can\'t play it.</string>
+    <string name="settings_format_mp3_title">MP3 · for old players</string>
+    <string name="settings_format_mp3">Re-encoded on the phone at 192 kbps for old car stereos and players. Takes a few seconds per song and loses a little quality.</string>
     <string name="settings_trim">Cut start and end</string>
     <string name="settings_trim_hint">Shows start/end fields for single links, e.g. to skip a music video\'s intro. Cuts at audio frame boundaries, no re-encoding.</string>
     <string name="settings_silence">Trim silence</string>
     <string name="settings_silence_hint">Removes silence at the start and end automatically. Also for mixes and albums.</string>
     <string name="settings_replaygain">Loudness tags (ReplayGain)</string>
     <string name="settings_replaygain_hint">Measures each song (EBU R128) and writes ReplayGain tags, so songs from different videos play at similar volume in players that support it. The audio itself is unchanged.</string>
-    <string name="settings_section_tags">Metadata and tagging</string>
+    <string name="settings_section_tags">Tags and cover art</string>
+    <string name="settings_section_tags_sub">How songs show up in your music app</string>
     <string name="settings_cover">Cover art</string>
-    <string name="settings_cover_hint">Embeds the video thumbnail, cropped square, as album art.</string>
+    <string name="settings_cover_hint">Embeds the video thumbnail as album art: cropped square for songs, full 16:9 for videos.</string>
     <string name="settings_titles">Smart titles</string>
-    <string name="settings_titles_hint">Splits "Artist - Song (Official Video)" into artist and title and removes "(Official Video)", "[HD]" and the like.</string>
+    <string name="settings_titles_hint">Splits \"Artist - Song (Official Video)\" into artist and title, and removes \"(Official Video)\", \"[HD]\" and the like.</string>
     <string name="settings_review">Edit tags before saving</string>
     <string name="settings_review_hint">Single links: a dialog to correct title, artist and album while the download runs.</string>
     <string name="settings_section_collections">Mixes, albums and playlists</string>
+    <string name="settings_section_collections_sub">When a link has many songs</string>
     <string name="settings_only_new">Only new songs</string>
     <string name="settings_only_new_hint">When re-opening a playlist, only songs not already saved (per the history) are ticked.</string>
-    <string name="settings_section_downloads">Downloads and reliability</string>
+    <string name="settings_section_downloads">Downloads and updates</string>
+    <string name="settings_section_downloads_sub">Speed and staying up to date</string>
     <string name="settings_parallel">Parallel chunk downloads</string>
     <string name="settings_parallel_hint">Fetches big video files over up to 3 connections. Drops back to one if YouTube rate-limits.</string>
     <string name="settings_updates">Check for updates</string>

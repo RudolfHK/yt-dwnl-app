@@ -259,17 +259,32 @@ Gear icon on the main screen. Everything is persisted; the defaults keep the app
 | **Cut start and end** | off | Start/end fields (`m:ss`, `h:mm:ss`, `83`, `1:23.5`) under single links, e.g. to skip a music video's intro. M4A/Opus are cut at codec frame boundaries (≈20 ms) without re-encoding; Opus keeps the standard 80 ms pre-roll so the first sound is clean; MP3 is cut sample-exactly. Audio file only. |
 | **Trim silence** | off | Decodes once, finds where the sound starts and ends (peak below −50 dBFS, 150 ms margin kept) and cuts there, combined with a manual cut. Also for batches. |
 | **Loudness tags** | off | EBU R128 / ITU-R BS.1770 integrated loudness of the (cut) song → **ReplayGain 2.0** track gain/peak (reference −18 LUFS) in M4A (`----:com.apple.iTunes:REPLAYGAIN_*`) and MP3 (`TXXX`), **`R128_TRACK_GAIN`** in Opus (RFC 7845 forbids REPLAYGAIN_* there). The audio itself is unchanged; players with ReplayGain support play songs from different videos at a similar volume. Measured within 0.3 LU of ffmpeg's `ebur128`. |
-| **Cover art** | on | Largest thumbnail, centre square (letterbox bars of 4:3 thumbnails skipped), JPEG ≤720 px, embedded in M4A/MP4 (`covr`), Opus (`METADATA_BLOCK_PICTURE`) and MP3 (`APIC`). A failed thumbnail only costs the cover. |
+| **Cover art** | on | Largest thumbnail, letterbox bars of 4:3 thumbnails skipped. Songs get the centre square (JPEG ≤720 px) in M4A (`covr`), Opus (`METADATA_BLOCK_PICTURE`) and MP3 (`APIC`); the MP4 gets the whole 16:9 picture (≤1280 px wide). A failed thumbnail only costs the cover. |
 | **Smart titles** | on | "Artist - Song (Official Video) [HD]" → artist *Artist*, title *Song*; removes official video/audio/lyric video/visualizer/HD/4K/remastered noise, keeps meaningful brackets (*feat.*, *Remix*, *Live*, *Acoustic*); recognises –, —, ~ and quoted titles; leaves "- Topic" channels alone (their titles are already clean). |
 | **Edit tags before saving** | off | Single links: a dialog with title, artist and album appears as soon as the video is resolved, while the download continues. *Save* writes those tags (and file name); *Cancel download* cancels and leaves nothing behind. The notification says "Waiting for you to confirm the tags…". |
 | **Only new songs** | on | Re-opening a mix/album/playlist ticks only songs the history hasn't saved as audio yet; the others are marked "saved before" and can still be ticked. |
 | **Parallel chunk downloads** | off | Big video files are fetched over up to 3 connections (2 MB chunks into their place in the file). The first chunk always goes alone, to settle the request style; on HTTP 429 the download drops back to one connection instead of failing; a host that ignores Range falls back to the normal download. |
 | **Check for updates** | on | At most once a day, two anonymous requests to `api.github.com` (nothing else, nothing about you): this app's latest release and NewPipeExtractor's. A card says when a newer app build exists, or when NewPipeExtractor has a release newer than the built-in commit (2026-10-05) — that's usually the fix when YouTube breaks things. "YouTube changed something" errors then also say so. Dismissing hides the card until a different release appears; offline it retries an hour later. |
 
-**Polish:** the launcher icon has a monochrome layer (Material You themed icons on Android 13+), colours follow the
-wallpaper (dynamic colour) in light and dark mode — on Android 10–11, which have no wallpaper colours, an indigo
-light/dark scheme matching the icon instead of Material's default purple — the window background matches the dark theme from the first frame,
-and on tablets / unfolded phones (≥ 840 dp) the history sits next to the downloader; content is capped at 720 dp wide.
+## Look and feel
+
+- **Palette:** orange (actions), purple (accents, section icons, the icon background) and near-black (dark
+  surfaces), defined once in `ui/Theme.kt` as full Material 3 light and dark schemes. Brand colours on every phone —
+  no wallpaper ("dynamic") colours — and every text/background pair is at least WCAG AA (4.5:1). The window
+  background, notification accent and icon use the same values, so there's no colour jump at launch.
+- **Icon:** a minimal sound waveform with a download arrow landing on a tray ("audio from a video, saved"), orange
+  and white on a purple-to-black gradient. Adaptive icon with a monochrome layer for themed icons (Android 13+),
+  everything inside the 66 dp safe zone; the notification icon is the same glyph.
+- **Screens:** History and Advanced settings share one header — back arrow, centred title, and the screen's action
+  (*Clear*, *Reset*) as a visible tonal button. Both actions ask for confirmation first. The main screen has
+  ? (*Help*: how a download works, why some fail) and ⓘ (*About*: version and build date, extraction engine and
+  every library with version and licence, © year, licence, link to this repository, the full personal-use
+  notice). The "Personal use only" notice on the main screen is a compact warning strip.
+- **Advanced settings** are grouped into cards (Audio format · Cut and loudness · Tags and cover art · Mixes, albums
+  and playlists · Downloads and updates), each with an icon and a one-line description. The format is a segmented
+  choice with an explanation of the selected format right below it; every setting that differs from the
+  defaults is tinted and marked *Changed*, and *Reset* only appears when something was changed.
+- **Tablets / unfolded phones** (≥ 840 dp): downloader and history side by side; content is capped at 720 dp wide.
 
 ## Test plan
 
@@ -290,11 +305,11 @@ and on tablets / unfolded phones (≥ 840 dp) the history sits next to the downl
 | `AudioAnalyzerTest` (6, needs ffmpeg) | integrated loudness within 0.3 LU of ffmpeg `ebur128` (quiet tone, loud noise, mono, 44.1 kHz); ReplayGain relative to −18 LUFS and R128 to −23 in Q7.8; peak; leading/trailing silence found with a margin; nothing to trim and silent files; time ranges |
 | `WebmOpusRemuxerTest` (6, needs ffmpeg) | WebM → Ogg Opus decodes to exactly the same samples (so Ogg CRC, pre-skip and end padding are right — breaking any of them fails it), tags/R128 gain/cover readable, a cover spanning several Ogg pages, cuts at packet boundaries, packet durations from the TOC byte, non-WebM rejected |
 | `Mp3ExporterTest` (3, needs ffmpeg) | 192 kbps with the same loudness and duration as the source, ID3 tags/ReplayGain/cover readable, mono and exact cuts |
-| `CoverGeometryTest` (4) | 16:9 → centre square, letterboxed 4:3 skips the black bars, a dark picture isn't mistaken for bars, largest thumbnail wins |
-| `ProcessingPipelineTest` (9, needs ffmpeg) | end to end over HTTP: Opus with smart title + cover + R128; MP3 with ReplayGain matching ffmpeg; silence trimming without re-encoding; Opus cut; edited tags written; cancelling the tag dialog saves nothing and leaves no temp files; fallbacks (no Opus stream, no decoder, thumbnail 404) never cost the song; smart titles/cover off; Opus audio + video downloads AAC for the MP4, one progress bar over three downloads |
+| `CoverGeometryTest` (5) | 16:9 picture area for videos (bars dropped), 16:9 → centre square, letterboxed 4:3 skips the black bars, a dark picture isn't mistaken for bars, largest thumbnail wins |
+| `ProcessingPipelineTest` (10, needs ffmpeg) | end to end over HTTP: cancelling the tag dialog stops a running download at once (not after it finished); Opus with smart title + cover + R128; MP3 with ReplayGain matching ffmpeg; silence trimming without re-encoding; Opus cut; edited tags written; cancelling the tag dialog saves nothing and leaves no temp files; fallbacks (no Opus stream, no decoder, thumbnail 404) never cost the song; smart titles/cover off; Opus audio + video downloads AAC for the MP4, one progress bar over three downloads, the MP4's cover 1280×720 while the song's is 720×720 |
 | `TimeCodesTest` (3) | `m:ss` / `h:mm:ss` / seconds / fractions, invalid input, ranges |
 | `UpdateCheckerTest` (8) | nothing newer, newer extractor than the pinned commit date, release on the pinned day isn't newer, newer app wins the hint, prereleases ignored, HTTP errors/garbage throw, version comparison, once a day |
-| `AudioProcessingOnDeviceTest` (6, **Android emulator, API 29 + 35, in CI**) | MediaCodec decodes AAC and Opus (rate, channels, length); loudness and silence through MediaCodec match ffmpeg; Bitmap cover crop skips letterbox bars; Android reads covers from M4A and MP3 (`getEmbeddedPicture`), Opus tags, MediaExtractor/MediaPlayer accept the Opus/MP3/cut M4A; MediaStore keeps `.opus` / `.mp3` names |
+| `AudioProcessingOnDeviceTest` (7, **Android emulator, API 29 + 35, in CI**) | MediaCodec decodes AAC and Opus (rate, channels, length); loudness and silence through MediaCodec match ffmpeg; Bitmap cover crop skips letterbox bars (square for songs, 16:9 for videos); Android reads covers from M4A and MP3 (`getEmbeddedPicture`), Opus tags, MediaExtractor/MediaPlayer accept the Opus/MP3/cut M4A; MediaStore keeps `.opus` / `.mp3` names |
 | `HttpAudioDownloaderTest` (22) | chunked Range download, determinate vs indeterminate progress, server ignoring Range, resume after mid-chunk disconnect, 403 / 429, persistent network failure, empty responses, prompt cancel of a stalled read; request styles: NewPipe player style (POST, `range`/`rn` parameters, headers), fallback after a refusal that sticks for later chunks, a server ignoring the range parameter detected, refusal by every style names them, fallback for unknown sizes; parallel: same bytes over ≤3 connections, first chunk alone, progress monotonic, one connection by default, 429 drops back to one and finishes, 429 with one connection is a real rate-limit failure, Range-ignoring host falls back, player style with unique `rn` across connections, a refusal moves every connection to the next style once |
 | `AudioDownloadPipelineTest` (10) | phase order, tagged output, temp-file cleanup, extractor error pass-through (no download attempted), untaggable → saved with warning, WebM path, lying/failing storage → STORAGE error, cancel → Cancelled, file-name sanitising |
 | `NewPipeExtractionEngineTest` (12) | Opus stream choice (original track, highest bitrate, progressive only); NewPipe exception → `FailureReason` mapping keeps the original message; stream choice (original track, M4A over Opus, bitrate, progressive only); "- Topic" cleanup; playlist entries → items (incl. `&list=` URLs), non-downloadable entries, album title prefix; only progressive MP4 video-only streams offered, size from itag data or the "1080p60" label |
@@ -368,10 +383,15 @@ Use content you're allowed to download, e.g. Blender's *Big Buck Bunny* (CC BY):
 19. **Update card.** With a GitHub release newer than the installed version (or a NewPipeExtractor release after
     2026-10-05), the card appears on the next launch (at most daily); *Dismiss* hides it for that release; turning
     the check off hides it and stops all requests to GitHub.
-20. **Tablet / dark mode.** On a tablet or in landscape on a foldable: downloader and history side by side, content
+20. **Look.** History: back arrow, centred title, *Clear* button → confirmation that says how many entries go and that
+    files stay. Settings: changing a switch tints it and shows *Changed*; *Reset* appears and asks first. ? shows the
+    help, ⓘ the version, build date, libraries and the GitHub link (opens the browser). A downloaded video shows a
+    16:9 cover in the gallery, the song a square one. Light and dark mode both use orange/purple; the launcher icon
+    is the waveform-with-arrow, and with themed icons on it follows the wallpaper.
+21. **Tablet / dark mode.** On a tablet or in landscape on a foldable: downloader and history side by side, content
     not stretched across the screen. In dark mode no white flash at launch; on Android 13+ with themed icons on, the
     launcher icon follows the wallpaper colours.
-21. **Robustness extras.** Lock the screen / switch apps mid-download (it continues); rotate during a download (progress
+22. **Robustness extras.** Lock the screen / switch apps mid-download (it continues); rotate during a download (progress
    survives); deny the notification permission (download still works, just without a notification).
 
 ## Known limitations

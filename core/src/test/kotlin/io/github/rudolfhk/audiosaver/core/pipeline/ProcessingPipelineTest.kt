@@ -72,6 +72,7 @@ class ProcessingPipelineTest {
     private val requested = Collections.synchronizedList(mutableListOf<String>())
     private val states = Collections.synchronizedList(mutableListOf<DownloadState>())
     private var thumbStatus = 200
+    @Volatile private var slowAudio = false
     private val videoId = VideoId.of("aqz-KE-bpKQ")
 
     @Before fun start() {
@@ -82,7 +83,9 @@ class ProcessingPipelineTest {
                 requested += path
                 if (path == "/thumb" && thumbStatus != 200) return MockResponse.Builder().code(thumbStatus).build()
                 val file = File(fixtures, mapOf("/m4a" to "a.m4a", "/opus" to "a.webm", "/video" to "v.mp4", "/thumb" to "thumb.jpg").getValue(path))
-                return MockResponse.Builder().body(Buffer().write(file.readBytes())).build()
+                return MockResponse.Builder().body(Buffer().write(file.readBytes()))
+                    .apply { if (slowAudio && path == "/m4a") throttleBody(4096, 250, java.util.concurrent.TimeUnit.MILLISECONDS) }
+                    .build()
             }
         }
         server.start()
@@ -105,13 +108,23 @@ class ProcessingPipelineTest {
     }
 
     /** JVM stand-in for the app's Bitmap cropper. */
-    private val cropper = ImageCropper { bytes, maxSize ->
-        ImageIO.read(bytes.inputStream())?.let { image ->
-            val rect = CoverGeometry.squareCrop(image.width, image.height) { false }
+    private val cropper = object : ImageCropper {
+        private fun jpeg(image: java.awt.image.BufferedImage, x: Int, y: Int, w: Int, h: Int, outW: Int, outH: Int): CoverArt {
+            val out = java.awt.image.BufferedImage(outW, outH, java.awt.image.BufferedImage.TYPE_INT_RGB)
+            out.createGraphics().drawImage(image, 0, 0, outW, outH, x, y, x + w, y + h, null)
+            return CoverArt(ByteArrayOutputStream().also { ImageIO.write(out, "jpg", it) }.toByteArray(), outW, outH)
+        }
+
+        override fun cropSquare(image: ByteArray, maxSize: Int) = ImageIO.read(image.inputStream())?.let { img ->
+            val rect = CoverGeometry.squareCrop(img.width, img.height) { false }
             val size = minOf(rect.size, maxSize)
-            val square = java.awt.image.BufferedImage(size, size, java.awt.image.BufferedImage.TYPE_INT_RGB)
-            square.createGraphics().drawImage(image, 0, 0, size, size, rect.left, rect.top, rect.left + rect.size, rect.top + rect.size, null)
-            CoverArt(ByteArrayOutputStream().also { ImageIO.write(square, "jpg", it) }.toByteArray(), size, size)
+            jpeg(img, rect.left, rect.top, rect.size, rect.size, size, size)
+        }
+
+        override fun cropPicture(image: ByteArray, maxWidth: Int) = ImageIO.read(image.inputStream())?.let { img ->
+            val area = CoverGeometry.pictureArea(img.width, img.height) { false }
+            val w = minOf(area.width, maxWidth)
+            jpeg(img, area.left, area.top, area.width, area.height, w, area.height * w / area.width)
         }
     }
 
@@ -188,6 +201,17 @@ class ProcessingPipelineTest {
         assertTrue(File(tmp.root, "work").listFiles().orEmpty().isEmpty(), "temp files left")
     }
 
+    @Test fun `cancelling the tag dialog stops a running download at once`() {
+        slowAudio = true // ~5 s for the audio at this rate
+        val reviewer = TagReviewer { kotlinx.coroutines.delay(300); null }
+        val started = System.nanoTime()
+        assertFailsWith<CancellationException> { run(Processing(reviewTags = true), toolkit = Toolkit(FfmpegPcmDecoder(), cropper, reviewer)) }
+        val seconds = (System.nanoTime() - started) / 1e9
+        assertTrue(seconds < 2.5, "took $seconds s - the download ran on after the user cancelled")
+        assertIs<DownloadState.Cancelled>(states.last())
+        assertTrue(out.listFiles().orEmpty().isEmpty())
+    }
+
     @Test fun `fallbacks never cost the song`() {
         // No Opus stream -> M4A
         var done = assertIs<DownloadState.Done>(run(Processing(audioFormat = AudioFormat.OPUS), engine = engine(withOpus = false)))
@@ -218,6 +242,9 @@ class ProcessingPipelineTest {
         val video = assertIs<VideoResult.Saved>(done.video)
         val mp4 = File(File(out, "video"), video.saved.displayName)
         assertEquals(listOf("h264", "aac", "mjpeg"), FfmpegTools.probe(mp4, "stream=codec_name"), "video with AAC sound and the cover")
+        // The video's cover keeps the thumbnail's 16:9 shape; the song's is square.
+        assertEquals(listOf("1280", "720"), FfmpegTools.probe(mp4, "stream=width,height").takeLast(2), "video cover")
+        assertEquals(listOf("720", "720"), FfmpegTools.probe(File(out, done.saved!!.displayName), "stream=width,height").takeLast(2), "song cover")
         assertTrue(requested.containsAll(listOf("/opus", "/m4a", "/video")), "$requested")
         val downloading = states.filterIsInstance<DownloadState.Downloading>()
         val total = listOf("a.webm", "a.m4a", "v.mp4").sumOf { File(fixtures, it).length() }

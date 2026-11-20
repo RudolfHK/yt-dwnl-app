@@ -14,16 +14,15 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -49,7 +48,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.res.stringArrayResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
@@ -100,6 +98,8 @@ data class MainUiState(
     val updateSummary: String? = null,
     /** Added to "YouTube changed something" errors when an update exists. */
     val updateHint: String? = null,
+    /** This build's version name, for the About dialog. */
+    val appVersion: String = "",
 ) {
     val anyFormat: Boolean get() = saveAudio || saveVideo
     val busy: Boolean get() = download.isActive || batch?.isActive == true
@@ -128,6 +128,7 @@ interface MainActions {
     fun onTrimStart(text: String) = Unit
     fun onTrimEnd(text: String) = Unit
     fun onOpenUpdate(url: String) = Unit
+    fun onOpenUrl(url: String) = onOpenUpdate(url)
     fun onDismissUpdate(status: UpdateStatus) = Unit
 }
 
@@ -146,8 +147,10 @@ fun MainScreen(
     val loadedListing = (state.collection as? CollectionUi.Loaded)?.listing
     val canDownloadSingle = state.target is Target.Single && !state.busy && state.anyFormat && state.trimError == null
     var showInfo by rememberSaveable { mutableStateOf(false) }
+    var showHelp by rememberSaveable { mutableStateOf(false) }
 
-    if (showInfo) InfoDialog(onDismiss = { showInfo = false })
+    if (showInfo) AboutDialog(state.appVersion, onOpenGitHub = { actions.onOpenUrl(GITHUB_URL) }, onDismiss = { showInfo = false })
+    if (showHelp) HelpDialog(onDismiss = { showHelp = false })
 
     Scaffold(
         modifier = modifier,
@@ -184,9 +187,12 @@ fun MainScreen(
         ) {
             item {
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    AppIcon(Modifier.size(36.dp))
+                    Spacer(Modifier.width(12.dp))
                     Text(
                         stringResource(R.string.app_name),
-                        style = MaterialTheme.typography.headlineMedium,
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.SemiBold,
                         modifier = Modifier.weight(1f),
                     )
                     if (showHistoryButton) {
@@ -196,6 +202,9 @@ fun MainScreen(
                     }
                     IconButton(onClick = onOpenSettings) {
                         Icon(painterResource(R.drawable.ic_settings), contentDescription = stringResource(R.string.settings_button))
+                    }
+                    IconButton(onClick = { showHelp = true }) {
+                        Icon(painterResource(R.drawable.ic_help), contentDescription = stringResource(R.string.help_button))
                     }
                     IconButton(onClick = { showInfo = true }) {
                         Icon(painterResource(R.drawable.ic_info), contentDescription = stringResource(R.string.info_button))
@@ -289,7 +298,7 @@ fun MainScreen(
 
             item {
                 Spacer(Modifier.height(8.dp))
-                LegalNotice()
+                PersonalUseBanner()
             }
         }
     }
@@ -569,57 +578,6 @@ internal fun PhaseHeader(title: String, subtitle: String) {
 @Composable
 private fun CancelRow(onCancel: () -> Unit) {
     TextButton(onClick = onCancel) { Text(stringResource(R.string.cancel)) }
-}
-
-@Composable
-private fun LegalNotice() {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-    ) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(stringResource(R.string.notice_title), style = MaterialTheme.typography.titleSmall)
-            Text(stringResource(R.string.notice_body), style = MaterialTheme.typography.bodySmall)
-        }
-    }
-}
-
-@Composable
-private fun InfoDialog(onDismiss: () -> Unit) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        confirmButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.info_close)) } },
-        title = { Text(stringResource(R.string.info_title)) },
-        text = {
-            Column(
-                modifier = Modifier.verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Text(stringResource(R.string.info_how_title), style = MaterialTheme.typography.titleSmall)
-                stringArrayResource(R.array.info_how_steps).forEachIndexed { i, step ->
-                    InfoListItem("${i + 1}.", step)
-                }
-                Spacer(Modifier.height(4.dp))
-                Text(stringResource(R.string.info_errors_title), style = MaterialTheme.typography.titleSmall)
-                Text(stringResource(R.string.info_errors_intro), style = MaterialTheme.typography.bodyMedium)
-                stringArrayResource(R.array.info_errors).forEach { InfoListItem("•", it) }
-                Text(stringResource(R.string.info_errors_report), style = MaterialTheme.typography.bodySmall)
-                Spacer(Modifier.height(4.dp))
-                Text(stringResource(R.string.info_libs_title), style = MaterialTheme.typography.titleSmall)
-                stringArrayResource(R.array.info_libs).forEach { InfoListItem("•", it) }
-                Spacer(Modifier.height(4.dp))
-                Text(stringResource(R.string.info_license), style = MaterialTheme.typography.bodySmall)
-            }
-        },
-    )
-}
-
-@Composable
-private fun InfoListItem(marker: String, text: String) {
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(marker, style = MaterialTheme.typography.bodyMedium)
-        Text(text, style = MaterialTheme.typography.bodyMedium)
-    }
 }
 
 private fun clipboardText(context: Context): String? {

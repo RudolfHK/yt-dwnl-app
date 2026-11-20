@@ -102,6 +102,12 @@ class AudioProcessingOnDeviceTest {
         assertTrue("top row is black: ${Integer.toHexString(px)}", (px shr 16 and 0xFF) + (px shr 8 and 0xFF) + (px and 0xFF) > 60)
     }
 
+    @Test fun videoCoverKeepsThe16by9Picture() {
+        val art = BitmapCoverCropper().cropPicture(testAssets.open("letterboxed_thumb.jpg").readBytes(), 1280)!!
+        assertEquals(480, art.width)
+        assertEquals(270, art.height)
+    }
+
     private fun embeddedPicture(file: File): ByteArray? {
         val r = MediaMetadataRetriever()
         return try {

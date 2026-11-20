@@ -1,18 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Everything sits inside the 66 dp safe zone, so every launcher mask shows all of it. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- music note -->
-    <path
-        android:fillColor="#FFFFFFFF"
-        android:pathData="M58,32 L74,28 L74,36 L62,39 L62,62 A8,7 0 1,1 58,56 Z" />
-    <!-- download arrow -->
-    <path
-        android:fillColor="#FFFFFFFF"
-        android:pathData="M36,40 L42,40 L42,56 L48,56 L39,67 L30,56 L36,56 Z" />
-    <path
-        android:fillColor="#FFFFFFFF"
-        android:pathData="M34,72 L74,72 L74,77 L34,77 Z" />
+    <!-- Sound waveform (bars) with a download arrow landing on a tray: "audio from a video, saved". -->
+    <path android:strokeColor="#FFFF8A3D" android:strokeWidth="6" android:strokeLineCap="round"
+        android:pathData="M28,49v10M39,42v24M69,42v24M80,49v10" />
+    <path android:strokeColor="#FFFFFFFF" android:strokeWidth="6" android:strokeLineCap="round" android:strokeLineJoin="round"
+        android:pathData="M54,32v33M46,57l8,8l8,-8M36,77h36" />
 </vector>

@@ -38,10 +38,16 @@ data class Processing(
     val needsAnalysis: Boolean get() = replayGain || trimSilence
 }
 
-/** Turns a downloaded thumbnail into a square JPEG cover (Android: Bitmap; tests: ImageIO). */
+/** Turns a downloaded thumbnail into JPEG covers (Android: Bitmap; tests: ImageIO). */
 fun interface ImageCropper {
-    /** Null when the image can't be decoded. */
+    /** Square cover for songs; null when the image can't be decoded. */
     fun cropSquare(image: ByteArray, maxSize: Int): CoverArt?
+
+    /**
+     * The thumbnail in its own shape (16:9, letterbox bars removed) for the MP4's cover, at most
+     * [maxWidth] wide. Null = not supported or not decodable; the video then gets the square one.
+     */
+    fun cropPicture(image: ByteArray, maxWidth: Int): CoverArt? = null
 }
 
 /** What the user is asked to confirm when "edit tags before saving" is on. */

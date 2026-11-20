@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="window_background">#FFFDFBFF</color>
-    <color name="ic_launcher_background">#FF3B4BA8</color>
+    <!-- Must match the Compose theme (ui/Theme.kt) so there's no colour jump at launch. -->
+    <color name="window_background">#FFFFF8F5</color>
+    <!-- Brand orange: notification accent. -->
+    <color name="brand_orange">#FFE8630A</color>
 </resources>

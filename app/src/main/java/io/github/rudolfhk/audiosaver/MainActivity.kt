@@ -151,6 +151,7 @@ class MainActivity : ComponentActivity() {
                     update = update,
                     updateSummary = update?.let(viewModel::updateSummary),
                     updateHint = updateHint,
+                    appVersion = viewModel.appVersion,
                 )
                 BoxWithConstraints(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
                     val twoPane = maxWidth >= TWO_PANE_MIN_WIDTH

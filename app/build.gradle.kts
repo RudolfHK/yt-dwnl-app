@@ -1,3 +1,5 @@
+import java.time.LocalDate
+import java.time.ZoneOffset
 import com.android.build.api.dsl.ApplicationExtension
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
@@ -31,6 +33,18 @@ configure<ApplicationExtension> {
         // update check compares versionName with the latest GitHub release.
         versionCode = providers.environmentVariable("AUDIOSAVER_VERSION_CODE").orNull?.toInt() ?: 1
         versionName = providers.environmentVariable("AUDIOSAVER_VERSION_NAME").orNull ?: "1.0"
+
+        // Shown in the About dialog. The date is the build day (UTC) unless CI pins it.
+        val buildDate = providers.environmentVariable("AUDIOSAVER_BUILD_DATE").orNull
+            ?: LocalDate.now(ZoneOffset.UTC).toString()
+        buildConfigField("String", "BUILD_DATE", "\"$buildDate\"")
+        val versions = libs.versions
+        mapOf(
+            "OKHTTP" to versions.okhttp, "KOTLIN" to versions.kotlin, "COROUTINES" to versions.coroutines,
+            "SERIALIZATION" to versions.serialization, "COMPOSE" to versions.compose, "MATERIAL3" to versions.material3,
+            "JUMP3R" to versions.jump3r, "ANDROIDX_CORE" to versions.core, "ACTIVITY" to versions.activity,
+            "LIFECYCLE" to versions.lifecycle, "DESUGAR" to versions.desugar,
+        ).forEach { (name, version) -> buildConfigField("String", "V_$name", "\"${version.get()}\"") }
     }
 
     // Release signing only when a keystore is provided (CI secrets); otherwise the debug key.
@@ -64,6 +78,7 @@ configure<ApplicationExtension> {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     packaging {

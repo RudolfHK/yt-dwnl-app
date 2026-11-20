@@ -24,4 +24,9 @@ class CoverGeometryTest {
         val best = CoverGeometry.best(listOf(Thumbnail("hq", 480, 360), Thumbnail("maxres", 1280, 720), Thumbnail("default", 120, 90)))
         assertEquals("maxres", best?.url)
     }
+
+    @Test fun `picture area keeps the video shape and drops letterbox bars`() {
+        assertEquals(CoverGeometry.Area(0, 0, 1280, 720), CoverGeometry.pictureArea(1280, 720) { false })
+        assertEquals(CoverGeometry.Area(0, 45, 480, 270), CoverGeometry.pictureArea(480, 360) { y -> y < 45 || y >= 315 })
+    }
 }

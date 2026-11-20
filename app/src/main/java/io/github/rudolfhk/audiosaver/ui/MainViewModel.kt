@@ -102,6 +102,8 @@ class MainViewModel(
     /** Called when the screen is shown; does nothing unless a day has passed. */
     fun checkForUpdates() = updates.checkIfDue(advanced.current.updateCheck)
 
+    val appVersion: String get() = updates.build.appVersion
+
     val buildDescription: String get() = "${updates.build.appVersion} · NewPipeExtractor ${updates.build.extractorVersion}"
 
     // ---------------------------------------------------------------- tag review
@@ -142,7 +144,9 @@ class MainViewModel(
         val video = _videoQuality.value.takeIf { _saveVideo.value }
         if (!_saveAudio.value && video == null) return null
         val s = advanced.current
-        val trim = if (s.manualTrim) {
+        // The cut fields are only shown (and only matter) when the audio file is saved; a leftover
+        // invalid value must not block a video-only download.
+        val trim = if (s.manualTrim && _saveAudio.value) {
             try {
                 TimeCodes.range(_trimStart.value, _trimEnd.value)
             } catch (_: IllegalArgumentException) {
@@ -267,6 +271,9 @@ class MainViewModel(
             delay(debounceMs)
             _collection.value = try {
                 val page = controller.engine.listCollection(ref)
+                // The history loads in the background at app start; make sure it's there before
+                // deciding which songs are new (a link shared into a cold app would otherwise tick all).
+                controller.history.load()
                 val saved = if (advanced.current.onlyNewSongs) controller.history.savedAudioIds().mapNotNullTo(HashSet()) { id -> runCatching { VideoId.of(id) }.getOrNull() } else emptySet()
                 CollectionUi.Loaded(CollectionListing.of(page, saved))
             } catch (e: AudioSaveException) {

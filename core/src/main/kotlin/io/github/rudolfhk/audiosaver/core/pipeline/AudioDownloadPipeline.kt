@@ -22,6 +22,7 @@ import java.io.IOException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.isActive
@@ -201,9 +202,15 @@ class AudioDownloadPipeline(
 
                 // Tags, cover art and the user's review run alongside the download.
                 val proposed = metadataFor(audio, context, processing)
-                val cover = if (processing.coverArt && toolkit.cropper != null) async { fetchCover(audio) } else null
+                val cover = if (processing.coverArt && toolkit.cropper != null) async { fetchCover(audio, withVideo = videoStream != null) } else null
                 val reviewer = toolkit.reviewer?.takeIf { processing.reviewTags }
-                val review = reviewer?.let { r -> async { r.review(TagProposal(audio.title, proposed)) } }
+                val review = reviewer?.let { r ->
+                    async {
+                        // "Cancel download" in the dialog stops everything right away, not after the
+                        // download has finished.
+                        r.review(TagProposal(audio.title, proposed)).also { if (it == null) this@coroutineScope.cancel("Cancelled while confirming the tags") }
+                    }
+                }
 
                 val withVideo = videoStream != null
                 fun progress(offset: Long) = ThrottledProgress { done, total ->
@@ -228,9 +235,9 @@ class AudioDownloadPipeline(
                     if (!review.isCompleted) onState(DownloadState.Processing(videoId, proposed.title, ProcessingStep.WAITING_FOR_TAGS))
                     metadata = review.await() ?: throw CancellationException("Cancelled while confirming the tags")
                 }
-                val coverArt = cover?.await()
-                metadata = metadata.copy(cover = coverArt?.first)
-                val coverWarning = coverArt?.second
+                val covers = cover?.await()
+                metadata = metadata.copy(cover = covers?.square)
+                val coverWarning = covers?.warning
 
                 var saved: SavedAudio? = null
                 var warnings: List<String> = listOfNotNull(coverWarning)
@@ -260,7 +267,8 @@ class AudioDownloadPipeline(
                         downloader.download(video, rawVideo, processing.videoConnections, videoProgress::report)
                         videoProgress.flush()
                         onState(DownloadState.Merging(videoId, metadata.title))
-                        saveVideo(metadata.copy(replayGain = null), video, audioForVideo, rawVideo, merged, taggedVideo)
+                        // Videos get the thumbnail in its own 16:9 shape, songs the square.
+                        saveVideo(metadata.copy(replayGain = null, cover = covers?.picture ?: metadata.cover), video, audioForVideo, rawVideo, merged, taggedVideo)
                     } catch (e: Exception) {
                         if (e is CancellationException || !currentCoroutineContext().isActive) throw e
                         // The audio is already saved: report the video's own failure next to it.
@@ -293,15 +301,19 @@ class AudioDownloadPipeline(
         }
     }
 
-    /** The cover, or a warning saying why there's none. Never fails the download. */
-    private suspend fun fetchCover(audio: ResolvedAudio): Pair<CoverArt?, String?> {
-        val thumbnail = CoverGeometry.best(audio.thumbnails) ?: return null to null
+    private class Covers(val square: CoverArt?, val picture: CoverArt?, val warning: String?)
+
+    /** Square cover for the song, 16:9 for the video, or a warning saying why there's none. Never fails the download. */
+    private suspend fun fetchCover(audio: ResolvedAudio, withVideo: Boolean): Covers {
+        val thumbnail = CoverGeometry.best(audio.thumbnails) ?: return Covers(null, null, null)
         return try {
             val bytes = downloader.fetchBytes(thumbnail.url)
-            val cover = withContext(Dispatchers.Default) { toolkit.cropper?.cropSquare(bytes, COVER_SIZE) }
-            cover to (if (cover == null) "No cover art: the thumbnail couldn't be decoded." else null)
+            val cropper = toolkit.cropper
+            val square = withContext(Dispatchers.Default) { cropper?.cropSquare(bytes, COVER_SIZE) }
+            val picture = if (withVideo) withContext(Dispatchers.Default) { cropper?.cropPicture(bytes, VIDEO_COVER_WIDTH) } else null
+            Covers(square, picture, if (square == null) "No cover art: the thumbnail couldn't be decoded." else null)
         } catch (e: AudioSaveException) {
-            null to "No cover art: ${e.detail}"
+            Covers(null, null, "No cover art: ${e.detail}")
         }
     }
 
@@ -420,6 +432,7 @@ class AudioDownloadPipeline(
     companion object {
         const val VIDEO_MIME = "video/mp4"
         private const val COVER_SIZE = 720
+        private const val VIDEO_COVER_WIDTH = 1280
     }
 
     /** Reports at most every 1% / 200 ms so the UI and notification aren't flooded. */

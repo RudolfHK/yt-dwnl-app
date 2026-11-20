@@ -15,22 +15,20 @@ import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.selection.SelectionContainer
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
@@ -73,32 +71,34 @@ fun HistoryScreen(
     }
 
     if (confirmClear) {
-        AlertDialog(
-            onDismissRequest = { confirmClear = false },
-            title = { Text(stringResource(R.string.history_clear_title)) },
-            text = { Text(stringResource(R.string.history_clear_text)) },
-            confirmButton = {
-                TextButton(onClick = { confirmClear = false; actions.onClear() }) { Text(stringResource(R.string.history_clear_confirm)) }
-            },
-            dismissButton = { TextButton(onClick = { confirmClear = false }) { Text(stringResource(R.string.cancel)) } },
+        ConfirmDialog(
+            title = stringResource(R.string.history_clear_title),
+            text = pluralStringResource(R.plurals.history_clear_text, entries.size, entries.size),
+            confirmLabel = stringResource(R.string.history_clear_confirm),
+            onConfirm = { confirmClear = false; actions.onClear() },
+            onDismiss = { confirmClear = false },
         )
     }
 
-    Scaffold(modifier = modifier) { padding ->
+    Scaffold(
+        modifier = modifier,
+        topBar = {
+            ScreenTopBar(
+                title = stringResource(R.string.history_title),
+                onBack = if (showBack) actions::onClose else null,
+                action = if (entries.isNotEmpty()) {
+                    TopBarAction(stringResource(R.string.history_clear), R.drawable.ic_delete) { confirmClear = true }
+                } else {
+                    null
+                },
+            )
+        },
+    ) { padding ->
         LazyColumn(
             modifier = Modifier.fillMaxSize().padding(padding).wrapContentWidth().widthIn(max = CONTENT_MAX_WIDTH).fillMaxWidth(),
             contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            item {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (showBack) TextButton(onClick = actions::onClose) { Text(stringResource(R.string.back)) }
-                    Text(stringResource(R.string.history_title), style = MaterialTheme.typography.headlineMedium, modifier = Modifier.weight(1f))
-                    if (entries.isNotEmpty()) {
-                        TextButton(onClick = { confirmClear = true }) { Text(stringResource(R.string.history_clear)) }
-                    }
-                }
-            }
             item {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     FilterChip(filter == HistoryFilter.ALL, { filterName = HistoryFilter.ALL.name }, label = { Text(stringResource(R.string.history_all, entries.size)) })

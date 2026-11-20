@@ -150,6 +150,7 @@ internal class DownloadNotifications(private val context: Context) {
 
     private fun base() = NotificationCompat.Builder(context, CHANNEL_ID)
         .setSmallIcon(R.drawable.ic_notification)
+        .setColor(ContextCompat.getColor(context, R.color.brand_orange))
         .setContentIntent(openAppIntent())
 
     @SuppressLint("MissingPermission") // checked right here

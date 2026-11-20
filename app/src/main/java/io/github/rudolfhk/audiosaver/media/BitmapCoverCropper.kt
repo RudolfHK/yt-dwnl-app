@@ -10,30 +10,41 @@ import io.github.rudolfhk.audiosaver.core.tag.CoverArt
 import io.github.rudolfhk.audiosaver.core.tag.CoverGeometry
 import java.io.ByteArrayOutputStream
 
-/** Thumbnail -> centred square JPEG (letterbox bars skipped), at most [maxSize] pixels wide. */
+/** Thumbnail -> JPEG covers: a centred square for songs, the 16:9 picture for videos (letterbox bars skipped). */
 class BitmapCoverCropper : ImageCropper {
 
-    override fun cropSquare(image: ByteArray, maxSize: Int): CoverArt? {
+    override fun cropSquare(image: ByteArray, maxSize: Int): CoverArt? = withBitmap(image) { source ->
+        val rect = CoverGeometry.squareCrop(source.width, source.height) { y -> isDarkRow(source, y) }
+        val size = minOf(rect.size, maxSize)
+        render(source, Rect(rect.left, rect.top, rect.left + rect.size, rect.top + rect.size), size, size)
+    }
+
+    /** For the MP4: the whole picture in its own shape (bars removed), at most [maxWidth] wide. */
+    override fun cropPicture(image: ByteArray, maxWidth: Int): CoverArt? = withBitmap(image) { source ->
+        val area = CoverGeometry.pictureArea(source.width, source.height) { y -> isDarkRow(source, y) }
+        val width = minOf(area.width, maxWidth)
+        val height = maxOf(1, area.height * width / area.width)
+        render(source, Rect(area.left, area.top, area.left + area.width, area.top + area.height), width, height)
+    }
+
+    private inline fun withBitmap(image: ByteArray, block: (Bitmap) -> CoverArt?): CoverArt? {
         val source = BitmapFactory.decodeByteArray(image, 0, image.size) ?: return null
-        try {
-            val rect = CoverGeometry.squareCrop(source.width, source.height) { y -> isDarkRow(source, y) }
-            val size = minOf(rect.size, maxSize)
-            val square = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
-            try {
-                Canvas(square).drawBitmap(
-                    source,
-                    Rect(rect.left, rect.top, rect.left + rect.size, rect.top + rect.size),
-                    Rect(0, 0, size, size),
-                    Paint(Paint.FILTER_BITMAP_FLAG),
-                )
-                val out = ByteArrayOutputStream()
-                if (!square.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, out)) return null
-                return CoverArt(out.toByteArray(), size, size)
-            } finally {
-                square.recycle()
-            }
+        return try {
+            block(source)
         } finally {
             source.recycle()
+        }
+    }
+
+    private fun render(source: Bitmap, from: Rect, width: Int, height: Int): CoverArt? {
+        val target = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        try {
+            Canvas(target).drawBitmap(source, from, Rect(0, 0, width, height), Paint(Paint.FILTER_BITMAP_FLAG))
+            val out = ByteArrayOutputStream()
+            if (!target.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, out)) return null
+            return CoverArt(out.toByteArray(), width, height)
+        } finally {
+            target.recycle()
         }
     }
 
